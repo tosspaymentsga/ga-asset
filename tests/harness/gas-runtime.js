@@ -221,8 +221,12 @@ class FakeSpreadsheet {
   }
 }
 
-function createSpreadsheetApp(registry) {
+function createSpreadsheetApp(registry, events) {
   return {
+    /** 실제 Apps Script 의 지연 쓰기 반영. 여기서는 호출 순서만 기록한다. */
+    flush() {
+      events.push('flush');
+    },
     openById(id) {
       if (!registry.has(id)) throw new Error('Spreadsheet not found: ' + id);
       return registry.get(id);
@@ -398,6 +402,8 @@ function createRuntime(options = {}) {
   };
 
   const logs = [];
+  /** Lock 획득/해제와 flush 호출 순서 (동시성 검증용) */
+  const lockEvents = [];
 
   const context = {
     console,
@@ -431,11 +437,19 @@ function createRuntime(options = {}) {
     },
     LockService: {
       // Node 는 단일 스레드이므로 실제 경합은 발생하지 않는다.
-      // 코드 경로(획득/해제)가 정상 동작하는지만 확인한다.
+      // 획득/해제/flush 의 호출 순서만 기록해 검증한다.
       getScriptLock: () => ({
-        tryLock: () => true,
-        waitLock: () => true,
-        releaseLock: () => {},
+        tryLock: () => {
+          lockEvents.push('lock');
+          return true;
+        },
+        waitLock: () => {
+          lockEvents.push('lock');
+          return true;
+        },
+        releaseLock: () => {
+          lockEvents.push('unlock');
+        },
       }),
     },
     Session: {
@@ -467,7 +481,7 @@ function createRuntime(options = {}) {
     Logger: {
       log: (msg) => { logs.push(String(msg)); },
     },
-    SpreadsheetApp: createSpreadsheetApp(spreadsheets),
+    SpreadsheetApp: createSpreadsheetApp(spreadsheets, lockEvents),
     DriveApp: createDriveApp(driveFiles, driveFolders),
   };
 
@@ -515,6 +529,7 @@ function createRuntime(options = {}) {
     call,
     resetExecution,
     sheetStats,
+    lockEvents,
     logs,
     session,
     scriptProps,

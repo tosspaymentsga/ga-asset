@@ -137,10 +137,25 @@ eq('미지급 제외', res.skipped.notAssigned, 1);
 eq('Tag 없음 제외', res.skipped.noTag, 1);
 eq('파일럿 필터 제외', res.skipped.filtered, 1);
 
-// 중복 실행 방지
-res = rt.call('createAuditTargetsFromMaster', ['PILOT_2026_09', null]);
-eq('재실행해도 중복 생성 없음', res.created, 0);
-check('이미 존재 표시', res.already === true);
+// 중복 실행은 거부되어야 한다 (실사 분모 보호)
+let refused = null;
+try {
+  rt.call('createAuditTargetsFromMaster', ['PILOT_2026_09', null]);
+} catch (err) {
+  refused = err;
+}
+check('재실행은 거부된다', refused !== null);
+check(
+  '거부 사유를 알려준다',
+  refused && String(refused.message).indexOf('이미') >= 0,
+  refused && refused.message
+);
+rt.resetExecution();
+eq(
+  '대상 건수 불변',
+  rt.context.Repository.listTargetsByCampaign('PILOT_2026_09').length,
+  5
+);
 
 /* -------- 4. Asset_Master 는 변하지 않는다 -------- */
 console.log('\n[4] Asset_Master 불변');

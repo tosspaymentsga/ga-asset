@@ -25,7 +25,7 @@ var Auth = {
    */
   resolveEmail: function () {
     try {
-      return Util.trim(Session.getActiveUser().getEmail()).toLowerCase();
+      return Util.normalizeEmail(Session.getActiveUser().getEmail());
     } catch (err) {
       return '';
     }
@@ -35,9 +35,9 @@ var Auth = {
   mockEmail: function () {
     if (!Config.bool('ALLOW_MOCK_USER')) return '';
     try {
-      return Util.trim(
+      return Util.normalizeEmail(
         PropertiesService.getUserProperties().getProperty(MOCK_USER_PROPERTY)
-      ).toLowerCase();
+      );
     } catch (err) {
       return '';
     }
@@ -93,12 +93,12 @@ var Auth = {
   },
 
   isAdminEmail: function (email) {
-    var normalized = Util.trim(email).toLowerCase();
+    var normalized = Util.normalizeEmail(email);
     if (!normalized) return false;
     if (Config.adminEmails().indexOf(normalized) >= 0) return true;
     var admins = Repository.listAdmins();
     for (var i = 0; i < admins.length; i++) {
-      if (Util.trim(admins[i].email).toLowerCase() === normalized) return true;
+      if (Util.normalizeEmail(admins[i].email) === normalized) return true;
     }
     return false;
   },
@@ -127,9 +127,9 @@ var Auth = {
     if (!Config.bool('ALLOW_MOCK_USER')) {
       throw new AppError('FORBIDDEN', ERROR_MESSAGES.FORBIDDEN, 'mock user disabled');
     }
-    var normalized = Util.trim(email).toLowerCase();
+    var normalized = Util.normalizeEmail(email);
     var allowed = Repository.listUsers().filter(function (u) {
-      return Util.trim(u.email).toLowerCase() === normalized;
+      return Util.normalizeEmail(u.email) === normalized;
     });
     if (!allowed.length) {
       throw new AppError('FORBIDDEN', ERROR_MESSAGES.FORBIDDEN, 'unknown demo user');

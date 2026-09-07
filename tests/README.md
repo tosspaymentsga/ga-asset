@@ -15,6 +15,8 @@ harness/
   qrgen.js         테스트용 최소 QR 인코더 (버전 1~4 / EC L / 바이트 모드) + PNG 출력
 scenarios.js       서버 로직 시나리오 (MOCK / GOOGLE_SHEETS 양쪽에서 동일하게 실행)
 column-mapping.js  실제 회사 시트 연결 시뮬레이션 (시트명·컬럼명·컬럼순서가 모두 다른 경우)
+safety.js          배포 전 안전성 (컬럼 충돌 · 이메일 정규화 · 대상 분모 보호 ·
+                   Lock/flush 순서 · Drive 사진 권한 · validateSetup 분류)
 performance.js     Sheets 호출 횟수·읽은 셀 수 계측 (자산 1,222건 규모)
 ui/                Playwright 화면 검증 (390px / 1440px)
 screenshots.js     화면 캡처
@@ -30,6 +32,7 @@ screenshots.js     화면 캡처
 # 1) 서버 로직 (브라우저 불필요)
 node scenarios.js
 node column-mapping.js
+node safety.js
 node performance.js
 
 # 2) 화면 (Playwright)

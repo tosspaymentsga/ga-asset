@@ -66,7 +66,7 @@ tests/                       검증 도구 (배포되지 않음) — tests/READM
 |---|---|---|
 | `MODE` | `GOOGLE_SHEETS` | `MOCK` / `GOOGLE_SHEETS` |
 | `SPREADSHEET_ID` | `1AbC...xyz` | 스프레드시트 URL 의 `/d/` 와 `/edit` 사이 문자열 |
-| `ADMIN_EMAILS` | `asset.admin@company.com` | 쉼표 구분. `Admin` 시트와 함께 사용 |
+| `ADMIN_EMAILS` | (비어 있음) | 쉼표 구분. `Admin` 시트와 함께 사용. **코드에는 관리자 이메일을 하드코딩하지 않습니다** |
 
 ### 2-2. 시트 이름 (기본값과 다를 때만)
 
@@ -136,6 +136,9 @@ var COLUMN_ALIASES = {
 - 회사 컬럼명이 목록에 없으면 **해당 배열에 문자열 하나만 추가**하면 됩니다.
 - 비교 시 공백·밑줄·하이픈·대소문자를 무시합니다 → `TAG 번호`, `tag_번호`, `TAG번호` 동일 취급.
 - **컬럼 순서는 상관없습니다.** 헤더 이름으로 위치를 찾습니다.
+- **충돌은 자동으로 해결하지 않습니다.** 시트의 두 컬럼(`TAG번호`, `태그번호`)이 같은
+  표준 필드로 인식되면 임의로 하나를 고르지 않고 `validateSetup()` 이 ERROR 로 보고하며,
+  이 상태에서는 `createAuditTargetsFromMaster()` 도 거부됩니다.
 - 코드가 모르는 컬럼(예: `비고`)은 무시되며, 쓰기 시에도 기존 값이 보존됩니다.
 - `사번(employee_no)` 은 읽기만 하고 현재 로직에서 사용하지 않습니다.
 
@@ -356,10 +359,18 @@ QR 페이로드는 Tag ID 뿐 아니라 `https://…/t/Q12345`, `TAG:Q12345` 형
 
 ```bash
 node tests/scenarios.js        # 서버 로직 (MOCK / GOOGLE_SHEETS)         206 checks
-node tests/column-mapping.js   # 실제 회사 시트 컬럼명/순서 시뮬레이션      65 checks
+node tests/column-mapping.js   # 실제 회사 시트 컬럼명/순서 시뮬레이션      66 checks
+node tests/safety.js           # 배포 전 안전성 (충돌/정규화/분모/동시성/권한) 81 checks
 node tests/performance.js      # Apps Script 성능 규칙 (자산 1,222건)      15 checks
 cd tests && npm install && npx playwright test    # 실제 화면 (390px/1440px)  54 tests
 ```
+
+### validateSetup() 분류
+
+| 구분 | 항목 |
+|---|---|
+| **ERROR** (파일럿 시작 불가) | 필수 시트 없음 · 필수 컬럼 매핑 실패 · **컬럼 충돌** · Tag/자산번호 중복 · ACTIVE 차수 0개 또는 2개 이상 · 활성 차수의 대상 Snapshot 없음 · Drive 폴더 접근 불가 · `SPREADSHEET_ID` 미설정 |
+| **WARNING** (운영 가능, 확인 필요) | 이메일 없는 지급 자산 · Tag 없는 지급 자산 · 관리자 미설정 · 이메일에 공백 섞임 · 이메일 형식 이상 · `ALLOW_MOCK_USER`/`ALLOW_DEV_TAG_INPUT` 활성 · `MODE≠GOOGLE_SHEETS` · Drive 폴더 ID 미지정 · Master 에 없는 대상 |
 
 자세한 내용은 [`tests/README.md`](tests/README.md) 를 참고하세요.
 

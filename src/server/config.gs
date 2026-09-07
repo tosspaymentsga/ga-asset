@@ -36,8 +36,13 @@ var CONFIG_DEFAULTS = {
   /** QR 스캐너의 "개발용 Tag 직접 입력" 노출 여부. 운영 배포에서는 false */
   ALLOW_DEV_TAG_INPUT: 'true',
 
-  /** Admin 시트와 별개로 항상 관리자로 취급할 이메일 (쉼표 구분) */
-  ADMIN_EMAILS: 'asset.admin@company.com',
+  /**
+   * Admin 시트와 별개로 항상 관리자로 취급할 이메일 (쉼표 구분).
+   * 기본값은 비워 둔다 — 코드에 관리자 이메일을 하드코딩하면 운영 도메인에
+   * 같은 주소가 존재할 때 의도치 않게 관리자 권한이 부여된다.
+   * 관리자는 Admin 시트 또는 이 스크립트 속성으로만 지정한다.
+   */
+  ADMIN_EMAILS: '',
 
   /** 사용자별 실사 대상 캐시 TTL (초) */
   CACHE_TTL_SECONDS: '300',
@@ -108,7 +113,7 @@ var SHEET_NAME_PROPERTIES = {
 var COLUMN_ALIASES = {
   ASSET_MASTER: {
     asset_id:      ['asset_id', '자산번호', '자산ID', '자산코드'],
-    asset_tag:     ['asset_tag', 'TAG번호', 'Tag번호', '태그번호', 'QR번호'],
+    asset_tag:     ['asset_tag', 'TAG번호', '태그번호', 'QR번호'],
     asset_name:    ['asset_name', '자산명', '품명'],
     model:         ['model', '모델명', '모델'],
     serial_number: ['serial_number', 'Serial', 'S/N', '시리얼', '시리얼번호'],
@@ -338,9 +343,10 @@ var Config = {
   },
 
   adminEmails: function () {
+    // 이메일 정규화 규칙은 Util.normalizeEmail 하나만 사용한다
     return String(this.get('ADMIN_EMAILS') || '')
       .split(',')
-      .map(function (s) { return s.trim().toLowerCase(); })
+      .map(function (s) { return Util.normalizeEmail(s); })
       .filter(function (s) { return s.length > 0; });
   },
 

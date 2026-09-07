@@ -204,21 +204,37 @@ function createAuditTargetsFromMaster(campaignId, onlyEmails) {
   }
   var cid = Util.trim(campaign.campaign_id);
 
+  // 실사 시작 이후 분모가 바뀌면 안 되므로, 이미 대상이 있으면 거부한다.
+  // (조용히 no-op 하면 "다시 만들었다" 고 오해할 수 있어 오류로 알린다)
   var existing = SheetIO.objects('AUDIT_TARGET');
+  var existingCount = 0;
   for (var e = 0; e < existing.length; e++) {
-    if (Util.trim(existing[e].campaign_id) === cid) {
-      Logger.log(
-        '이미 대상 Snapshot 이 존재합니다: ' + cid + ' — 중복 생성하지 않습니다.'
-      );
-      return { campaign_id: cid, created: 0, skipped: [], already: true };
-    }
+    if (Util.trim(existing[e].campaign_id) === cid) existingCount++;
   }
+  if (existingCount > 0) {
+    throw new Error(
+      '차수 ' + cid + ' 의 대상 Snapshot 이 이미 ' + existingCount + '건 존재합니다. ' +
+      '실사 분모가 바뀌지 않도록 재생성을 거부합니다. ' +
+      '정말 다시 만들려면 Audit_Target 시트에서 해당 차수 행을 먼저 삭제하세요.'
+    );
+  }
+
+  // 컬럼 매핑이 모호한 상태로는 대상을 만들지 않는다 (잘못된 분모가 고정된다)
+  ['ASSET_MASTER', 'AUDIT_TARGET'].forEach(function (key) {
+    var conflicts = SheetMapper.detectConflicts(key, SheetIO.header(key));
+    if (conflicts.length) {
+      throw new Error(
+        SheetMapper.describeConflict(Config.sheetName(key), conflicts[0]) +
+        ' — validateSetup() 으로 전체 충돌을 확인하세요.'
+      );
+    }
+  });
 
   var allow = null;
   if (onlyEmails && onlyEmails.length) {
     allow = {};
     for (var m = 0; m < onlyEmails.length; m++) {
-      allow[Util.trim(onlyEmails[m]).toLowerCase()] = true;
+      allow[Util.normalizeEmail(onlyEmails[m])] = true;
     }
   }
 
@@ -236,7 +252,7 @@ function createAuditTargetsFromMaster(campaignId, onlyEmails) {
       skipped.notAssigned++;
       continue;
     }
-    var email = Util.trim(asset.user_email).toLowerCase();
+    var email = Util.normalizeEmail(asset.user_email);
     if (!email) { skipped.noEmail++; continue; }
     if (!Util.trim(asset.asset_tag)) { skipped.noTag++; continue; }
     if (allow && !allow[email]) { skipped.filtered++; continue; }
@@ -349,10 +365,12 @@ function validateSetup() {
       SheetIO.invalidate(key);
       var map = SheetIO.map(key);
       var missing = SheetMapper.missing(map, REQUIRED_COLUMNS[key] || []);
+      var conflicts = SheetMapper.detectConflicts(key, SheetIO.header(key));
       info.columns[key] = {
         sheet: name,
         matched: Object.keys(map).sort(),
-        missing: missing
+        missing: missing,
+        conflicts: conflicts
       };
       if (missing.length) {
         errors.push(
@@ -360,6 +378,10 @@ function validateSetup() {
           ' → config.gs 의 COLUMN_ALIASES.' + key + ' 에 실제 컬럼명을 추가하세요.'
         );
       }
+      // 컬럼 충돌은 임의 선택 없이 오류로 보고한다 (파일럿 시작 차단)
+      conflicts.forEach(function (conflict) {
+        errors.push(SheetMapper.describeConflict(name, conflict));
+      });
     } catch (err) {
       errors.push(
         name + ' 시트를 열 수 없습니다. ' +
@@ -381,13 +403,18 @@ function validateSetup() {
   var noTag = 0;
   var noEmail = 0;
   var badEmail = [];
+  var messyEmail = [];
   var assigned = 0;
 
   for (var i = 0; i < assets.length; i++) {
     var id = Util.trim(assets[i].asset_id);
     var tag = Util.normalizeTag(assets[i].asset_tag);
-    var email = Util.trim(assets[i].user_email).toLowerCase();
+    var email = Util.normalizeEmail(assets[i].user_email);
     var status = Util.trim(assets[i].asset_status).toUpperCase();
+
+    if (Util.needsEmailCleanup(assets[i].user_email)) {
+      messyEmail.push(String(assets[i].user_email));
+    }
 
     if (id) {
       if (seenId[id]) dupId.push(id);
@@ -412,7 +439,8 @@ function validateSetup() {
     duplicateAssetIds: dupId.length,
     duplicateTags: dupTag.length,
     missingTag: noTag,
-    assignedWithoutEmail: noEmail
+    assignedWithoutEmail: noEmail,
+    emailsNeedingCleanup: messyEmail.length
   };
 
   if (dupTag.length) {
@@ -429,6 +457,13 @@ function validateSetup() {
   }
   if (noTag) {
     warnings.push('asset_tag 가 없는 자산 ' + noTag + '건 — 실사 대상에서 제외됩니다.');
+  }
+  if (messyEmail.length) {
+    warnings.push(
+      '이메일에 공백·줄바꿈이 섞인 값 ' + messyEmail.length + '건 ' +
+      '(예: "' + messyEmail.slice(0, 3).join('", "') + '"). ' +
+      '비교 시에는 자동 정리되지만 시트 값도 정리하는 편이 좋습니다.'
+    );
   }
   if (badEmail.length) {
     warnings.push('이메일 형식이 이상한 값 ' + badEmail.length + '건 (예: ' + badEmail.slice(0, 3).join(', ') + ').');
@@ -457,7 +492,7 @@ function validateSetup() {
     var users = {};
     var orphan = 0;
     for (var t = 0; t < mine.length; t++) {
-      users[Util.trim(mine[t].user_email).toLowerCase()] = true;
+      users[Util.normalizeEmail(mine[t].user_email)] = true;
       if (!seenId[Util.trim(mine[t].asset_id)]) orphan++;
     }
     info.targets = {
@@ -483,7 +518,11 @@ function validateSetup() {
     fromProperty: Config.adminEmails().length
   };
   if (!adminRows.length && !Config.adminEmails().length) {
-    errors.push('관리자가 없습니다. Admin 시트에 추가하거나 ADMIN_EMAILS 를 설정하세요.');
+    // 직원 실사 자체는 가능하므로 경고로 둔다 (관리자 화면만 사용할 수 없다)
+    warnings.push(
+      '관리자가 설정되지 않았습니다. Admin 시트에 추가하거나 ADMIN_EMAILS 를 설정하세요. ' +
+      '(직원 실사는 가능하지만 관리자 화면을 아무도 볼 수 없습니다)'
+    );
   }
 
   /* --- Drive --- */

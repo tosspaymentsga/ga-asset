@@ -56,6 +56,86 @@ var SheetMapper = {
       if (map[requiredFields[i]] === undefined) out.push(requiredFields[i]);
     }
     return out;
+  },
+
+  /**
+   * 컬럼 매핑 충돌 검출 (연결 점검 전용 — 런타임 경로에서는 호출하지 않는다).
+   *
+   * 두 가지를 잡는다.
+   *  (1) AMBIGUOUS_FIELD : 시트의 서로 다른 두 컬럼이 같은 표준 필드로 인식됨
+   *                        예) `TAG번호` 와 `Tag No` 가 둘 다 asset_tag
+   *  (2) AMBIGUOUS_COLUMN: 시트의 한 컬럼이 두 개의 표준 필드로 인식됨
+   *
+   * 어느 쪽이든 임의로 하나를 고르면 조용히 잘못된 데이터를 읽게 되므로,
+   * 자동 선택하지 않고 오류로 보고한다.
+   */
+  detectConflicts: function (sheetKey, headerRow) {
+    var aliases = COLUMN_ALIASES[sheetKey] || {};
+    var conflicts = [];
+
+    var normalizedHeader = [];
+    for (var c = 0; c < headerRow.length; c++) {
+      normalizedHeader.push(this.normalize(headerRow[c]));
+    }
+
+    // (1) 하나의 표준 필드에 매칭되는 컬럼이 2개 이상인가
+    var fieldToColumns = {};
+    for (var field in aliases) {
+      var hits = [];
+      var candidates = aliases[field];
+      for (var a = 0; a < candidates.length; a++) {
+        var target = this.normalize(candidates[a]);
+        for (var h = 0; h < normalizedHeader.length; h++) {
+          if (normalizedHeader[h] === target && hits.indexOf(h) < 0) hits.push(h);
+        }
+      }
+      if (hits.length > 1) {
+        conflicts.push({
+          type: 'AMBIGUOUS_FIELD',
+          field: field,
+          columns: hits.map(function (i) { return Util.trim(headerRow[i]); })
+        });
+      }
+      fieldToColumns[field] = hits;
+    }
+
+    // (2) 하나의 컬럼이 2개 이상의 표준 필드로 인식되는가
+    var columnToFields = {};
+    for (var f in fieldToColumns) {
+      var list = fieldToColumns[f];
+      for (var i = 0; i < list.length; i++) {
+        if (!columnToFields[list[i]]) columnToFields[list[i]] = [];
+        columnToFields[list[i]].push(f);
+      }
+    }
+    for (var idx in columnToFields) {
+      if (columnToFields[idx].length > 1) {
+        conflicts.push({
+          type: 'AMBIGUOUS_COLUMN',
+          column: Util.trim(headerRow[Number(idx)]),
+          fields: columnToFields[idx]
+        });
+      }
+    }
+
+    return conflicts;
+  },
+
+  /** 충돌 목록을 사람이 읽을 수 있는 문장으로 */
+  describeConflict: function (sheetName, conflict) {
+    if (conflict.type === 'AMBIGUOUS_FIELD') {
+      return (
+        sheetName + ' 시트에서 컬럼 [' + conflict.columns.join('], [') + '] 이 ' +
+        '모두 `' + conflict.field + '` 로 인식됩니다. ' +
+        '어느 쪽을 쓸지 자동으로 정하지 않습니다. ' +
+        '시트에서 한 컬럼의 이름을 바꾸거나 COLUMN_ALIASES 에서 별칭을 정리하세요.'
+      );
+    }
+    return (
+      sheetName + ' 시트의 컬럼 [' + conflict.column + '] 이 ' +
+      '`' + conflict.fields.join('`, `') + '` 여러 필드로 인식됩니다. ' +
+      'COLUMN_ALIASES 에서 별칭이 겹치지 않게 정리하세요.'
+    );
   }
 };
 
@@ -234,7 +314,7 @@ var SheetRepository = {
     var seen = {};
     var out = [];
     for (var i = 0; i < rows.length; i++) {
-      var email = Util.trim(rows[i].user_email).toLowerCase();
+      var email = Util.normalizeEmail(rows[i].user_email);
       if (!email || seen[email]) continue;
       seen[email] = true;
       out.push({
@@ -255,7 +335,7 @@ var SheetRepository = {
    * 결과 자체를 CacheService 에 담아둔다(§18).
    */
   findUserByEmail: function (email) {
-    var normalized = Util.trim(email).toLowerCase();
+    var normalized = Util.normalizeEmail(email);
     if (!normalized) return null;
 
     var cacheKey = 'user:' + normalized;
@@ -369,7 +449,7 @@ var SheetRepository = {
    * 결과가 작으므로 CacheService 에 캐싱한다(§18).
    */
   listTargetsByUser: function (campaignId, email) {
-    var key = 'targets:' + campaignId + ':' + Util.trim(email).toLowerCase();
+    var key = 'targets:' + campaignId + ':' + Util.normalizeEmail(email);
     var cached = Cache.get(key);
     if (cached) return cached;
 
@@ -475,6 +555,10 @@ var SheetRepository = {
         record = RepoUtil.merge(RepoUtil.emptyLog(), log);
         SheetIO.appendObject('AUDIT_LOG', record);
       }
+      // Lock 을 놓기 전에 실제 시트에 반영한다.
+      // flush() 없이 락을 풀면 다음 실행이 아직 기록되지 않은 상태를 읽어
+      // 같은 자산의 로그가 두 줄 생길 수 있다.
+      SpreadsheetApp.flush();
       Cache.remove('dashboard:' + log.campaign_id);
       return record;
     } finally {
@@ -552,6 +636,8 @@ var SheetRepository = {
         merged = RepoUtil.merge(RepoUtil.emptyUnlisted(), record);
         SheetIO.appendObject('AUDIT_UNLISTED', merged);
       }
+      // upsertLog 와 같은 이유로 Lock 해제 전에 반영한다
+      SpreadsheetApp.flush();
       Cache.remove('dashboard:' + record.campaign_id);
       return merged;
     } finally {

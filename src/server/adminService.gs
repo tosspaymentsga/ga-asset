@@ -96,7 +96,7 @@ var AdminService = {
       else if (status === AUDIT_STATUS.NOT_IN_POSSESSION) deptMap[dept].review_required++;
       else deptMap[dept].not_started++;
 
-      var email = Util.trim(target.user_email).toLowerCase();
+      var email = Util.normalizeEmail(target.user_email);
       if (!userMap[email]) userMap[email] = { total: 0, responded: 0 };
       userMap[email].total++;
       if (AssetService.isResponded(status)) userMap[email].responded++;
@@ -181,7 +181,7 @@ var AdminService = {
     var nameByEmail = {};
     var deptByEmail = {};
     for (var t = 0; t < targets.length; t++) {
-      var em = Util.trim(targets[t].user_email).toLowerCase();
+      var em = Util.normalizeEmail(targets[t].user_email);
       if (!nameByEmail[em]) {
         nameByEmail[em] = Util.trim(targets[t].user_name);
         deptByEmail[em] = Util.trim(targets[t].department);
@@ -194,7 +194,7 @@ var AdminService = {
       var log = logByAsset[Util.trim(target.asset_id)];
       var status = (log && Util.trim(log.audit_status)) || AUDIT_STATUS.NOT_STARTED;
       rows.push({
-        key: 'log|' + campaign.campaign_id + '|' + target.asset_id + '|' + Util.trim(target.user_email).toLowerCase(),
+        key: 'log|' + campaign.campaign_id + '|' + target.asset_id + '|' + Util.normalizeEmail(target.user_email),
         user_name: Util.trim(target.user_name),
         user_email: Util.trim(target.user_email),
         department: Util.trim(target.department),
@@ -217,7 +217,7 @@ var AdminService = {
 
     for (var u = 0; u < unlisted.length; u++) {
       var rec = unlisted[u];
-      var email = Util.trim(rec.user_email).toLowerCase();
+      var email = Util.normalizeEmail(rec.user_email);
       var type = Util.trim(rec.report_type) || EXCEPTION_TYPE.UNLISTED;
       rows.push({
         key: 'unl|' + campaign.campaign_id + '|' + email + '|' + Util.normalizeTag(rec.scanned_tag),
@@ -310,7 +310,7 @@ var AdminService = {
     var deptByEmail = {};
     for (var t = 0; t < targets.length; t++) {
       targetByAsset[Util.trim(targets[t].asset_id)] = targets[t];
-      var em = Util.trim(targets[t].user_email).toLowerCase();
+      var em = Util.normalizeEmail(targets[t].user_email);
       if (!nameByEmail[em]) {
         nameByEmail[em] = Util.trim(targets[t].user_name);
         deptByEmail[em] = Util.trim(targets[t].department);
@@ -332,7 +332,7 @@ var AdminService = {
         openTotal++;
       }
       var target = targetByAsset[Util.trim(log.asset_id)] || {};
-      var email = Util.trim(log.user_email).toLowerCase();
+      var email = Util.normalizeEmail(log.user_email);
       items.push({
         key: 'log|' + campaign.campaign_id + '|' + Util.trim(log.asset_id) + '|' + email,
         category: category,
@@ -364,7 +364,7 @@ var AdminService = {
         counts[ucat]++;
         openTotal++;
       }
-      var uemail = Util.trim(rec.user_email).toLowerCase();
+      var uemail = Util.normalizeEmail(rec.user_email);
       // 관리자에게만 노출되는 Master 대조 힌트
       var master = Repository.findAssetByTag(rec.scanned_tag);
       var hint = master

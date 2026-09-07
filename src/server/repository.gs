@@ -77,8 +77,10 @@ var Repository = {
  * (배열 필터링 로직을 한 곳에 모아 Mock/Sheet 간 동작 차이를 없앤다)
  */
 var RepoUtil = {
+  /** 이메일 비교는 항상 Util.normalizeEmail 한 가지 규칙만 사용한다 */
   matchEmail: function (a, b) {
-    return Util.trim(a).toLowerCase() === Util.trim(b).toLowerCase();
+    var left = Util.normalizeEmail(a);
+    return left !== '' && left === Util.normalizeEmail(b);
   },
 
   matchTag: function (a, b) {

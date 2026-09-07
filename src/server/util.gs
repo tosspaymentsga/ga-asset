@@ -60,6 +60,27 @@ var Util = {
   },
 
   /**
+   * 이메일 정규화 — 비교와 기록에 쓰이는 단일 규칙.
+   *
+   * Asset_Master / Audit_Target / Audit_Log / Admin / getActiveUser() 모두
+   * 이 함수를 통과한 값으로만 비교한다. 시트 원본 값은 수정하지 않는다.
+   *
+   * 시트에서 흘러들어오는 앞뒤 공백·줄바꿈·중간 공백(복사 붙여넣기 사고)을 제거하고
+   * 소문자로 맞춘다.
+   */
+  normalizeEmail: function (value) {
+    if (value === null || value === undefined) return '';
+    return String(value).replace(/\s+/g, '').toLowerCase();
+  },
+
+  /** 시트 원본 이메일에 중간 공백 등 정규화가 필요한 값이 있는지 (점검용) */
+  needsEmailCleanup: function (value) {
+    var raw = value === null || value === undefined ? '' : String(value);
+    if (!raw) return false;
+    return raw !== Util.normalizeEmail(raw) && raw.trim() !== Util.normalizeEmail(raw);
+  },
+
+  /**
    * QR 페이로드에서 Tag ID 추출.
    * QR 에는 고유 Tag ID 만 담는 것이 원칙이지만,
    * URL(`https://.../t/Q12345`) 또는 `TAG:Q12345` 형태로 인쇄된 경우도 허용한다.
