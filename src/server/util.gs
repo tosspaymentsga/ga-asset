@@ -93,45 +93,8 @@ var Util = {
     return index;
   },
 
-  /**
-   * getValues() 결과(헤더 포함)를 객체 배열로 변환.
-   * 시트 전체를 한 번만 읽고 배열에서 처리하기 위한 기본 도구(§18).
-   */
-  rowsToObjects: function (values) {
-    if (!values || values.length < 2) return [];
-    var header = values[0];
-    var keys = [];
-    for (var c = 0; c < header.length; c++) keys.push(Util.trim(header[c]));
-
-    var out = [];
-    for (var r = 1; r < values.length; r++) {
-      var row = values[r];
-      var isEmpty = true;
-      var obj = {};
-      for (var i = 0; i < keys.length; i++) {
-        if (!keys[i]) continue;
-        var cell = row[i];
-        if (cell instanceof Date) cell = cell.toISOString();
-        obj[keys[i]] = cell === null || cell === undefined ? '' : cell;
-        if (!Util.isBlank(cell)) isEmpty = false;
-      }
-      if (!isEmpty) {
-        obj.__row = r + 1; // 시트상의 실제 행 번호 (1-based)
-        out.push(obj);
-      }
-    }
-    return out;
-  },
-
-  /** 객체를 헤더 순서에 맞춘 배열로 변환 */
-  objectToRow: function (obj, header) {
-    var row = [];
-    for (var i = 0; i < header.length; i++) {
-      var v = obj[header[i]];
-      row.push(v === null || v === undefined ? '' : v);
-    }
-    return row;
-  },
+  // 시트 행 ↔ 객체 변환은 컬럼 매핑을 거쳐야 하므로 SheetIO 에만 둔다.
+  // (여기에 헤더명을 그대로 쓰는 헬퍼를 두면 매핑을 우회하게 된다)
 
   uuid: function () {
     return Utilities.getUuid();

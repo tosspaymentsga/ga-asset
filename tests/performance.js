@@ -48,7 +48,7 @@ function build() {
 
 /** 대량 데이터 생성 후 대상 스냅샷 재생성 */
 function scaleUp(rt, users, perUser) {
-  rt.call('generateBulkMockData', [users, perUser]);
+  rt.call('generateBulkMockData', [users, perUser, 'ADD-TEST-DATA']);
   // 기존 스냅샷을 지우고 다시 만든다
   rt.resetExecution();
   const ss = rt.context.SpreadsheetApp.openById(

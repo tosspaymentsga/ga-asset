@@ -280,8 +280,12 @@ test('QR 스캐너는 카메라를 못 쓰면 대체 수단을 안내한다', as
   await page.getByTestId('cta-scan').click();
 
   await expect(page.locator('.scanner-fallback')).toContainText('카메라 권한이 허용되지 않았습니다');
-  await expect(page.locator('.scanner-fallback')).toContainText('사진으로 QR 인식');
+  await expect(page.locator('.scanner-fallback')).toContainText('QR 촬영해서 확인');
+  // 실시간 카메라가 막혀도 기본 확인 방식(촬영 → 디코딩)은 그대로 쓸 수 있어야 한다
   await expect(page.getByTestId('scan-file')).toHaveCount(1);
+  const captureBtn = page.locator('label.btn', { hasText: 'QR 촬영해서 확인' });
+  await expect(captureBtn).toBeVisible();
+  await expect(captureBtn).toHaveClass(/btn-primary/);
   await auditLayout(page, 'QR 카메라 불가');
   void context;
 });

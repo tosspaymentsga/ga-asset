@@ -496,7 +496,8 @@ function createRuntime(options = {}) {
         'Auth.reset();',
         'Cache._version = null;',
         'MockStore._memo = {};',
-        'SheetIO._ss = null; SheetIO._sheets = {}; SheetIO._values = {}; SheetIO._objects = {};',
+        'SheetIO._ss = null; SheetIO._sheets = {}; SheetIO._values = {};' +
+          ' SheetIO._objects = {}; SheetIO._maps = {};',
       ].join('\n'),
       context
     );

@@ -52,9 +52,23 @@ var CONFIG_DEFAULTS = {
   MAX_PHOTO_BYTES: '6291456',
 
   /** 서비스 표시 이름 */
-  APP_NAME: '자산실사'
+  APP_NAME: '자산실사',
+
+  /* 실제 스프레드시트의 시트 이름이 다를 때만 채운다 (비우면 SHEET_NAMES 기본값) */
+  SHEET_ASSET_MASTER: '',
+  SHEET_AUDIT_CAMPAIGN: '',
+  SHEET_AUDIT_TARGET: '',
+  SHEET_AUDIT_LOG: '',
+  SHEET_AUDIT_UNLISTED: '',
+  SHEET_ADMIN: '',
+  SHEET_ERROR_LOG: ''
 };
 
+/**
+ * 시트 키 → 기본 시트 이름.
+ * 실제 스프레드시트의 시트 이름이 다르면 코드를 고치지 않고
+ * 스크립트 속성(SHEET_ASSET_MASTER 등)으로 덮어쓴다.
+ */
 var SHEET_NAMES = {
   ASSET_MASTER: 'Asset_Master',
   AUDIT_CAMPAIGN: 'Audit_Campaign',
@@ -65,22 +79,154 @@ var SHEET_NAMES = {
   ERROR_LOG: 'Error_Log'
 };
 
-/** 시트별 헤더 정의 (setup.gs 가 이 정의로 시트를 생성한다) */
+/** 시트 이름을 덮어쓰는 스크립트 속성 키 */
+var SHEET_NAME_PROPERTIES = {
+  ASSET_MASTER: 'SHEET_ASSET_MASTER',
+  AUDIT_CAMPAIGN: 'SHEET_AUDIT_CAMPAIGN',
+  AUDIT_TARGET: 'SHEET_AUDIT_TARGET',
+  AUDIT_LOG: 'SHEET_AUDIT_LOG',
+  AUDIT_UNLISTED: 'SHEET_AUDIT_UNLISTED',
+  ADMIN: 'SHEET_ADMIN',
+  ERROR_LOG: 'SHEET_ERROR_LOG'
+};
+
+/* ------------------------------------------------------------------ */
+/* 컬럼 매핑                                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * ★ 실제 Sheet 연결 시 여기만 고치면 된다.
+ *
+ * 코드 전체는 왼쪽의 "표준 필드명" 만 사용한다.
+ * 오른쪽 배열은 실제 시트 헤더에서 찾아볼 후보(별칭)이며, 앞에 있는 것부터 매칭한다.
+ * 비교는 공백/밑줄/하이픈/대소문자를 무시하므로
+ * `TAG 번호`, `tag_번호`, `TAG번호` 는 모두 같은 것으로 본다.
+ *
+ * 회사 자산대장 컬럼명이 다르면 해당 배열에 컬럼명을 추가하기만 하면 된다.
+ * (컬럼 순서는 상관없다. 목록에 없는 컬럼은 무시된다.)
+ */
+var COLUMN_ALIASES = {
+  ASSET_MASTER: {
+    asset_id:      ['asset_id', '자산번호', '자산ID', '자산코드'],
+    asset_tag:     ['asset_tag', 'TAG번호', 'Tag번호', '태그번호', 'QR번호'],
+    asset_name:    ['asset_name', '자산명', '품명'],
+    model:         ['model', '모델명', '모델'],
+    serial_number: ['serial_number', 'Serial', 'S/N', '시리얼', '시리얼번호'],
+    user_name:     ['user_name', '성명', '사용자', '사용자명', '이름'],
+    user_email:    ['user_email', '이메일', '회사이메일', '메일'],
+    department:    ['department', '조직', '부서', '소속'],
+    asset_status:  ['asset_status', '지급상태', '자산상태', '상태'],
+    updated_at:    ['updated_at', '수정일시', '갱신일시'],
+    // 선택 항목 — 현재 로직에서 사용하지 않지만 있으면 그대로 읽어둔다
+    employee_no:   ['employee_no', '사번', '사원번호']
+  },
+
+  AUDIT_CAMPAIGN: {
+    campaign_id:   ['campaign_id', '차수ID', '실사차수'],
+    campaign_name: ['campaign_name', '차수명', '실사명'],
+    start_date:    ['start_date', '시작일'],
+    end_date:      ['end_date', '종료일'],
+    status:        ['status', '상태'],
+    created_at:    ['created_at', '생성일시']
+  },
+
+  AUDIT_TARGET: {
+    campaign_id: ['campaign_id', '차수ID'],
+    asset_id:    ['asset_id', '자산번호'],
+    asset_tag:   ['asset_tag', 'TAG번호', '태그번호'],
+    asset_name:  ['asset_name', '자산명'],
+    user_name:   ['user_name', '성명', '사용자'],
+    user_email:  ['user_email', '이메일'],
+    department:  ['department', '조직', '부서']
+  },
+
+  AUDIT_LOG: {
+    campaign_id:         ['campaign_id', '차수ID'],
+    asset_id:            ['asset_id', '자산번호'],
+    asset_tag:           ['asset_tag', 'TAG번호'],
+    user_email:          ['user_email', '이메일'],
+    verification_method: ['verification_method', '확인방법'],
+    scanned_tag:         ['scanned_tag', '스캔TAG'],
+    photo_file_id:       ['photo_file_id', '사진FileID'],
+    photo_url:           ['photo_url', '사진URL'],
+    audit_status:        ['audit_status', '실사상태'],
+    exception_type:      ['exception_type', '예외사유'],
+    note:                ['note', '메모'],
+    verified_at:         ['verified_at', '확인일시'],
+    created_at:          ['created_at', '생성일시'],
+    updated_at:          ['updated_at', '수정일시'],
+    review_state:        ['review_state', '처리상태'],
+    review_note:         ['review_note', '처리메모'],
+    reviewed_by:         ['reviewed_by', '처리자'],
+    reviewed_at:         ['reviewed_at', '처리일시']
+  },
+
+  AUDIT_UNLISTED: {
+    campaign_id:   ['campaign_id', '차수ID'],
+    user_email:    ['user_email', '이메일'],
+    scanned_tag:   ['scanned_tag', '스캔TAG', 'TAG번호'],
+    photo_file_id: ['photo_file_id', '사진FileID'],
+    photo_url:     ['photo_url', '사진URL'],
+    note:          ['note', '메모'],
+    created_at:    ['created_at', '생성일시'],
+    status:        ['status', '처리상태'],
+    report_type:   ['report_type', '신고유형'],
+    review_note:   ['review_note', '처리메모'],
+    reviewed_by:   ['reviewed_by', '처리자'],
+    reviewed_at:   ['reviewed_at', '처리일시']
+  },
+
+  ADMIN: {
+    email:    ['email', '이메일'],
+    name:     ['name', '성명', '이름'],
+    added_at: ['added_at', '등록일']
+  },
+
+  ERROR_LOG: {
+    timestamp:  ['timestamp', '발생일시'],
+    user_email: ['user_email', '이메일'],
+    fn:         ['fn', '함수'],
+    message:    ['message', '메시지'],
+    detail:     ['detail', '상세']
+  }
+};
+
+/**
+ * 없으면 동작이 불가능한 필수 컬럼.
+ * validateSetup() 이 이 목록으로 연결 전 점검을 수행한다.
+ */
+var REQUIRED_COLUMNS = {
+  ASSET_MASTER: ['asset_id', 'asset_tag', 'asset_name', 'user_email', 'asset_status'],
+  AUDIT_CAMPAIGN: ['campaign_id', 'campaign_name', 'status'],
+  AUDIT_TARGET: ['campaign_id', 'asset_id', 'asset_tag', 'user_email'],
+  AUDIT_LOG: [
+    'campaign_id', 'asset_id', 'user_email', 'audit_status',
+    'verification_method', 'verified_at'
+  ],
+  AUDIT_UNLISTED: ['campaign_id', 'user_email', 'scanned_tag', 'status'],
+  ADMIN: ['email'],
+  ERROR_LOG: ['timestamp', 'fn', 'message']
+};
+
+/**
+ * 시트별 표준 헤더 (setup.gs 가 새 시트를 만들 때 사용한다).
+ * 이미 존재하는 시트의 헤더는 건드리지 않고 COLUMN_ALIASES 로 해석한다.
+ */
 var SHEET_SCHEMA = {
-  Asset_Master: [
+  ASSET_MASTER: [
     'asset_id', 'asset_tag', 'asset_name', 'model', 'serial_number',
     'user_name', 'user_email', 'department', 'asset_status', 'updated_at'
   ],
-  Audit_Campaign: [
+  AUDIT_CAMPAIGN: [
     'campaign_id', 'campaign_name', 'start_date', 'end_date', 'status',
     'created_at'
   ],
-  Audit_Target: [
+  AUDIT_TARGET: [
     'campaign_id', 'asset_id', 'asset_tag', 'asset_name', 'user_name',
     'user_email', 'department'
   ],
   // review_* 4개 컬럼은 관리자 Reconciliation(§17) 처리 결과 저장을 위한 추가 컬럼
-  Audit_Log: [
+  AUDIT_LOG: [
     'campaign_id', 'asset_id', 'asset_tag', 'user_email',
     'verification_method', 'scanned_tag', 'photo_file_id', 'photo_url',
     'audit_status', 'exception_type', 'note', 'verified_at',
@@ -89,14 +235,17 @@ var SHEET_SCHEMA = {
   ],
   // report_type / review_* 은 §17 확인 필요 분류·처리를 위한 추가 컬럼
   // status 컬럼이 관리자 처리 상태(REVIEW_STATE)를 담는다.
-  Audit_Unlisted: [
+  AUDIT_UNLISTED: [
     'campaign_id', 'user_email', 'scanned_tag', 'photo_file_id', 'photo_url',
     'note', 'created_at', 'status', 'report_type', 'review_note',
     'reviewed_by', 'reviewed_at'
   ],
-  Admin: ['email', 'name', 'added_at'],
-  Error_Log: ['timestamp', 'user_email', 'fn', 'message', 'detail']
+  ADMIN: ['email', 'name', 'added_at'],
+  ERROR_LOG: ['timestamp', 'user_email', 'fn', 'message', 'detail']
 };
+
+/** 실사 결과가 기록되는 시트 (Asset_Master 는 절대 포함하지 않는다) */
+var WRITABLE_SHEET_KEYS = ['AUDIT_LOG', 'AUDIT_UNLISTED', 'ERROR_LOG'];
 
 /** 내부 상태값 (§13) */
 var AUDIT_STATUS = {
@@ -176,6 +325,16 @@ var Config = {
 
   isMock: function () {
     return this.get('MODE') !== MODE_GOOGLE_SHEETS;
+  },
+
+  /**
+   * 시트 키 → 실제 시트 이름.
+   * 스크립트 속성(SHEET_ASSET_MASTER 등)이 있으면 그 값을 쓴다.
+   */
+  sheetName: function (key) {
+    var override = this.get(SHEET_NAME_PROPERTIES[key]);
+    override = override === null || override === undefined ? '' : String(override).trim();
+    return override || SHEET_NAMES[key];
   },
 
   adminEmails: function () {
