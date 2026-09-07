@@ -1,0 +1,12 @@
+# clasp 실제 설정 (scriptId 포함) — 커밋하지 않는다
+.clasp.json
+.clasprc.json
+
+# 테스트 도구
+tests/node_modules/
+tests/.harness-data/
+test-results/
+playwright-report/
+screenshots/
+
+.DS_Store

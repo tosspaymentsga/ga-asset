@@ -1,0 +1,466 @@
+<script>
+/* =================================================================
+   직원 화면 (모바일 퍼스트)
+
+   화면: signin / list / detail / scan / scanResult / photo /
+         exception / unlisted / complete
+   ================================================================= */
+var EmployeeViews = (function () {
+  var esc = UI.esc;
+
+  /* ---------------- 로그인 / 사용자 확인 ---------------- */
+
+  function signin(state) {
+    var demo = state.demoUsers || [];
+    var body = '';
+
+    if (state.authMessage) {
+      body += '<div class="notice notice-error" style="margin-bottom:16px">' +
+        esc(state.authMessage) +
+        '<div class="small" style="margin-top:6px">' +
+        '회사 Google 계정으로 로그인한 뒤 다시 접속해주세요.</div>' +
+        '</div>';
+    }
+
+    if (demo.length) {
+      body += '<div class="section-title">데모 계정 선택</div>' +
+        '<div class="radio-list">' +
+        demo.map(function (u) {
+          return '<button class="radio-item" style="width:100%;background:#fff;border:0;border-bottom:1px solid var(--line);text-align:left"' +
+            ' data-action="signInAs" data-email="' + esc(u.email) + '" data-testid="demo-user">' +
+            '<span style="flex:1;min-width:0">' +
+              '<span class="strong">' + esc(u.name) + '</span>' +
+              (u.isAdmin ? ' <span class="pill pill-photo">관리자</span>' : '') +
+              '<br><span class="small muted">' + esc(u.email) + ' · ' + esc(u.department) + '</span>' +
+            '</span><span class="chev">›</span>' +
+          '</button>';
+        }).join('') +
+        '</div>' +
+        '<p class="tiny muted" style="margin-top:12px">' +
+        '운영 배포에서는 이 화면 없이 Google Workspace 로그인 계정으로 자동 식별됩니다.</p>';
+    } else if (!state.authMessage) {
+      body += '<div class="notice">회사 Google 계정으로 로그인한 뒤 다시 접속해주세요.</div>';
+    }
+
+    return UI.appBar({ title: window.__APP_NAME__ || '자산실사' }) +
+      '<div class="wrap screen">' +
+        '<h1 class="page-title">자산실사</h1>' +
+        '<p class="page-desc">로그인한 회사 계정 기준으로 본인 보유 자산을 확인합니다.</p>' +
+        body +
+      '</div>';
+  }
+
+  /* ---------------- 내 자산 목록 ---------------- */
+
+  function list(state) {
+    var data = state.data;
+    var p = data.progress;
+
+    var cards = data.assets.length
+      ? data.assets.map(UI.assetCard).join('')
+      : '<div class="notice">이번 실사 차수에 배정된 자산이 없습니다.</div>';
+
+    var doneBanner = p.completed
+      ? '<button class="notice" style="width:100%;text-align:left;border-color:#CDEBD9;background:var(--green-soft);color:#0B6B3C"' +
+        ' data-action="goComplete" data-testid="done-banner">' +
+        '<span class="strong">자산실사가 완료되었습니다.</span><br>' +
+        '<span class="small">결과 보기 ›</span></button>'
+      : '';
+
+    var unlistedList = data.unlisted.length
+      ? '<div class="section-title">내가 등록한 확인 요청</div>' +
+        data.unlisted.map(function (u) {
+          return '<div class="asset-card" style="cursor:default">' +
+            '<span class="asset-main">' +
+              '<span class="asset-name">Tag ' + esc(u.scanned_tag) + '</span>' +
+              '<span class="asset-meta"><span>' + esc(u.report_label) + '</span>' +
+              '<span>' + UI.dateTime(u.created_at) + '</span></span>' +
+            '</span>' +
+            '<span class="asset-side">' + UI.pill('확인 필요', 'warn') + '</span>' +
+          '</div>';
+        }).join('')
+      : '';
+
+    return UI.appBar({
+        // 화면 제목과 중복되지 않도록 앱바에는 실사 차수를 표시한다
+        title: data.campaign.campaign_name,
+        right: data.user.isAdmin
+          ? '<button class="icon-btn" data-action="goAdmin" aria-label="관리자" data-testid="admin-entry">☰</button>'
+          : null
+      }) +
+      '<div class="wrap screen has-cta">' +
+        '<h1 class="page-title">자산실사</h1>' +
+        '<p class="page-desc" data-testid="greeting">' +
+          esc(data.user.name) + '님의 보유 자산을 확인해주세요.' +
+        '</p>' +
+        UI.progressCard(p) +
+        (doneBanner ? '<div style="margin-top:12px">' + doneBanner + '</div>' : '') +
+        '<div class="section-title">내 자산</div>' +
+        '<div class="stack" data-testid="asset-list">' + cards + '</div>' +
+        unlistedList +
+        '<div class="section-title">목록에 없는 자산</div>' +
+        '<div class="notice">' +
+          '현재 가지고 있지만 목록에 없는 자산이 있나요?' +
+          '<div style="margin-top:10px">' +
+            '<button class="btn btn-line" data-action="goUnlisted" data-testid="go-unlisted">목록에 없는 자산 등록</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="cta"><div class="cta-inner">' +
+        '<button class="btn btn-primary" data-action="goScan" data-testid="cta-scan">QR 스캔하기</button>' +
+      '</div></div>';
+  }
+
+  /* ---------------- 자산 상세 ---------------- */
+
+  function detail(state) {
+    var asset = findAsset(state, state.assetId);
+    if (!asset) return list(state);
+
+    var meta = '' +
+      '<div class="summary" style="margin-top:16px">' +
+        '<div class="summary-row"><span>자산번호</span><span>' + esc(asset.asset_id) + '</span></div>' +
+        '<div class="summary-row"><span>Tag</span><span>' + esc(asset.asset_tag) + '</span></div>' +
+        '<div class="summary-row"><span>상태</span><span>' +
+          UI.pill(asset.status_label, asset.status_tone) + '</span></div>' +
+        (asset.verified_at
+          ? '<div class="summary-row"><span>확인일시</span><span>' + UI.dateTime(asset.verified_at) + '</span></div>'
+          : '') +
+        (asset.exception_label
+          ? '<div class="summary-row"><span>사유</span><span>' + esc(asset.exception_label) + '</span></div>'
+          : '') +
+      '</div>';
+
+    var note = asset.note
+      ? '<div class="notice" style="margin-top:12px"><span class="small">' + esc(asset.note) + '</span></div>'
+      : '';
+
+    return UI.appBar({ title: '자산 확인', back: 'goList' }) +
+      '<div class="wrap screen has-cta">' +
+        '<h1 class="page-title" data-testid="detail-name">' + esc(asset.asset_name) + '</h1>' +
+        '<p class="page-desc">QR 스캔이 기본 확인 방법입니다. QR Tag 가 훼손된 경우 사진으로 확인해주세요.</p>' +
+        meta + note +
+        '<div class="stack" style="margin-top:20px">' +
+          '<button class="btn btn-primary" data-action="scanForAsset" data-testid="detail-scan">QR로 확인</button>' +
+          '<button class="btn btn-line" data-action="goPhoto" data-testid="detail-photo">사진으로 확인</button>' +
+        '</div>' +
+        '<div style="margin-top:18px;text-align:center">' +
+          '<button class="btn-text" data-action="goException" data-testid="detail-exception">' +
+            '이 자산을 보유하고 있지 않아요</button>' +
+        '</div>' +
+      '</div>';
+  }
+
+  /* ---------------- QR 스캐너 ---------------- */
+
+  function scan(state) {
+    var forAsset = state.assetId ? findAsset(state, state.assetId) : null;
+    var devInput = (state.data && state.data.options.allowDevTagInput)
+      ? '<div class="notice" style="margin-top:14px">' +
+          '<div class="small strong" style="margin-bottom:8px">개발용 Tag 입력</div>' +
+          '<div style="display:flex;gap:8px">' +
+            '<input class="input" id="dev-tag" placeholder="예) Q12345" data-testid="dev-tag-input" autocomplete="off">' +
+            '<button class="btn btn-line btn-sm" style="flex:0 0 auto;min-height:44px" data-action="devTagSubmit" data-testid="dev-tag-submit">확인</button>' +
+          '</div>' +
+        '</div>'
+      : '';
+
+    return UI.appBar({ title: 'QR 스캔', back: 'backFromScan' }) +
+      '<div class="wrap screen">' +
+        (forAsset
+          ? '<div class="notice" style="margin-bottom:14px"><span class="small">' +
+            esc(forAsset.asset_name) + ' (' + esc(forAsset.asset_id) + ') 의 QR Tag 를 비춰주세요.</span></div>'
+          : '') +
+        '<div class="scanner" id="scanner-box">' +
+          '<video id="scanner-video" playsinline muted></video>' +
+          '<div class="scanner-frame"></div>' +
+          '<div class="scanner-hint">자산에 부착된 QR Tag 를 사각형 안에 맞춰주세요</div>' +
+        '</div>' +
+        '<div class="stack" style="margin-top:16px">' +
+          '<label class="btn btn-line" style="margin:0">' +
+            '사진으로 QR 인식' +
+            '<input type="file" accept="image/*" capture="environment" hidden data-action="decodeFromFile" data-testid="scan-file">' +
+          '</label>' +
+          (state.assetId
+            ? '<button class="btn btn-quiet" data-action="goPhoto">대신 사진으로 확인하기</button>'
+            : '<button class="btn btn-quiet" data-action="goList">목록으로 돌아가기</button>') +
+        '</div>' +
+        devInput +
+      '</div>';
+  }
+
+  function scanMount(state) {
+    var video = document.getElementById('scanner-video');
+    var box = document.getElementById('scanner-box');
+    if (!video || !box) return;
+
+    QrScanner.start(
+      video,
+      function (value) {
+        QrScanner.stop();
+        App.handleScanValue(value);
+      },
+      function (code) {
+        box.innerHTML = '<div class="scanner-fallback">' +
+          '<div style="font-size:15px;color:#fff;margin-bottom:6px">' +
+            esc(QrScanner.message(code)) + '</div>' +
+          '<div>아래 <b>사진으로 QR 인식</b> 을 이용하시면 촬영한 사진에서 QR 을 읽습니다.</div>' +
+        '</div>';
+      }
+    );
+    void state;
+  }
+
+  function scanLeave() {
+    QrScanner.stop();
+  }
+
+  /* ---------------- QR 결과 ---------------- */
+
+  function scanResult(state) {
+    var r = state.scanResult || {};
+
+    if (r.result === 'MATCHED') {
+      var a = r.asset;
+      return UI.appBar({ title: '확인 완료', back: 'goList' }) +
+        '<div class="wrap screen has-cta">' +
+          '<div class="result">' +
+            '<div class="result-mark mark-ok">✓</div>' +
+            '<div class="result-title" data-testid="scan-ok">자산이 확인되었습니다</div>' +
+            '<div class="result-desc">' +
+              (r.already_verified ? '이미 확인된 자산입니다. 중복으로 기록되지 않았습니다.' : '실사 완료로 기록되었습니다.') +
+            '</div>' +
+          '</div>' +
+          '<div class="summary">' +
+            '<div class="summary-row"><span>자산명</span><span>' + esc(a.asset_name) + '</span></div>' +
+            '<div class="summary-row"><span>자산번호</span><span>' + esc(a.asset_id) + '</span></div>' +
+            '<div class="summary-row"><span>Tag</span><span>' + esc(a.asset_tag) + '</span></div>' +
+            '<div class="summary-row"><span>확인일시</span><span>' + UI.dateTime(a.verified_at) + '</span></div>' +
+          '</div>' +
+          (r.progress
+            ? '<div style="margin-top:14px">' + UI.progressCard(r.progress) + '</div>'
+            : '') +
+        '</div>' +
+        '<div class="cta"><div class="cta-inner stack">' +
+          (r.progress && r.progress.completed
+            ? '<button class="btn btn-primary" data-action="goComplete" data-testid="result-complete">실사 결과 보기</button>'
+            : '<button class="btn btn-primary" data-action="goScan" data-testid="result-scan-more">계속 스캔하기</button>') +
+          '<button class="btn btn-line" data-action="goList">내 자산 목록</button>' +
+        '</div></div>';
+    }
+
+    if (r.result === 'OTHER_OWN_ASSET') {
+      return UI.appBar({ title: '다른 자산의 Tag', back: 'goList' }) +
+        '<div class="wrap screen has-cta">' +
+          '<div class="result">' +
+            '<div class="result-mark mark-info">!</div>' +
+            '<div class="result-title">다른 자산의 Tag 입니다</div>' +
+            '<div class="result-desc">' + esc(r.expected_asset_name) + ' 을(를) 확인하려던 중 ' +
+              esc(r.asset.asset_name) + ' 의 Tag 를 스캔했습니다.</div>' +
+          '</div>' +
+          '<div class="summary">' +
+            '<div class="summary-row"><span>스캔한 Tag</span><span>' + esc(r.scanned_tag) + '</span></div>' +
+            '<div class="summary-row"><span>해당 자산</span><span>' + esc(r.asset.asset_name) + '</span></div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="cta"><div class="cta-inner stack">' +
+          '<button class="btn btn-primary" data-action="verifyScannedInstead" data-tag="' + esc(r.scanned_tag) + '">' +
+            esc(r.asset.asset_name) + ' 실사 완료 처리' +
+          '</button>' +
+          '<button class="btn btn-line" data-action="goScan">다시 스캔</button>' +
+        '</div></div>';
+    }
+
+    if (r.result === 'NOT_MINE') {
+      return UI.appBar({ title: '확인 필요', back: 'goList' }) +
+        '<div class="wrap screen has-cta">' +
+          '<div class="result">' +
+            '<div class="result-mark mark-warn">!</div>' +
+            '<div class="result-title" data-testid="scan-not-mine">내 자산 목록에 없는 자산입니다</div>' +
+            '<div class="result-desc">이 자산을 확인 필요 자산으로 등록할까요?</div>' +
+          '</div>' +
+          '<div class="summary">' +
+            '<div class="summary-row"><span>스캔한 Tag</span><span data-testid="not-mine-tag">' +
+              esc(r.scanned_tag) + '</span></div>' +
+          '</div>' +
+          '<p class="tiny muted" style="margin-top:12px">' +
+            '등록하면 자산관리 담당자가 확인합니다. 다른 사용자의 정보는 표시되지 않습니다.</p>' +
+        '</div>' +
+        '<div class="cta"><div class="cta-inner stack">' +
+          '<button class="btn btn-primary" data-action="registerForeign" data-tag="' + esc(r.scanned_tag) + '"' +
+            ' data-testid="register-foreign">확인 필요로 등록</button>' +
+          '<button class="btn btn-line" data-action="goScan" data-testid="rescan">다시 스캔</button>' +
+        '</div></div>';
+    }
+
+    // 인식 실패
+    return UI.appBar({ title: 'QR 인식 실패', back: 'goList' }) +
+      '<div class="wrap screen has-cta">' +
+        '<div class="result">' +
+          '<div class="result-mark mark-warn">!</div>' +
+          '<div class="result-title" data-testid="scan-failed">QR 을 인식하지 못했습니다</div>' +
+          '<div class="result-desc">' + esc(r.message || 'QR Tag 가 잘 보이도록 다시 시도해주세요.') + '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="cta"><div class="cta-inner stack">' +
+        '<button class="btn btn-primary" data-action="goScan">다시 스캔</button>' +
+        '<button class="btn btn-line" data-action="' + (state.assetId ? 'goPhoto' : 'goList') + '">' +
+          (state.assetId ? '사진으로 확인' : '목록으로') + '</button>' +
+      '</div></div>';
+  }
+
+  /* ---------------- 사진 실사 ---------------- */
+
+  function photo(state) {
+    var asset = findAsset(state, state.assetId);
+    if (!asset) return list(state);
+
+    var preview = state.photo && state.photo.previewUrl
+      ? '<img class="photo-preview" src="' + state.photo.previewUrl + '" alt="촬영한 사진" data-testid="photo-preview">'
+      : '<div class="photo-guide">' +
+          '자산과 자산 Tag가 함께 보이도록 촬영해주세요.' +
+        '</div>';
+
+    return UI.appBar({ title: '사진으로 확인', back: 'goDetail' }) +
+      '<div class="wrap screen has-cta">' +
+        '<h1 class="page-title">' + esc(asset.asset_name) + '</h1>' +
+        '<p class="page-desc">자산번호 ' + esc(asset.asset_id) + ' · Tag ' + esc(asset.asset_tag) + '</p>' +
+        preview +
+        '<div class="stack" style="margin-top:14px">' +
+          '<label class="btn btn-line" style="margin:0">' +
+            (state.photo ? '다시 촬영 / 다시 선택' : '촬영하거나 파일 선택') +
+            '<input type="file" accept="image/*" hidden data-action="pickPhoto" data-testid="photo-input">' +
+          '</label>' +
+        '</div>' +
+        '<div class="notice" style="margin-top:14px"><span class="small">' +
+          '사진 제출은 QR 확인과 동일하게 처리되지 않고, 자산관리 담당자가 확인합니다.' +
+        '</span></div>' +
+      '</div>' +
+      '<div class="cta"><div class="cta-inner">' +
+        '<button class="btn btn-primary" data-action="submitPhoto" data-testid="submit-photo"' +
+          (state.photo ? '' : ' disabled') + '>사진 제출</button>' +
+      '</div></div>';
+  }
+
+  /* ---------------- 미보유 신고 ---------------- */
+
+  function exception(state) {
+    var asset = findAsset(state, state.assetId);
+    if (!asset) return list(state);
+    var reasons = state.data.options.exceptionReasons;
+    var selected = state.exceptionType || '';
+
+    return UI.appBar({ title: '보유하지 않음', back: 'goDetail' }) +
+      '<div class="wrap screen has-cta">' +
+        '<h1 class="page-title">이 자산을 보유하고 있지 않나요?</h1>' +
+        '<p class="page-desc">' + esc(asset.asset_name) + ' · ' + esc(asset.asset_id) + '</p>' +
+        '<div class="radio-list" data-testid="reason-list">' +
+          reasons.map(function (r) {
+            return '<label class="radio-item">' +
+              '<input type="radio" name="reason" value="' + esc(r.value) + '"' +
+                (selected === r.value ? ' checked' : '') +
+                ' data-action="pickReason" data-testid="reason-' + esc(r.value) + '">' +
+              '<span>' + esc(r.label) + '</span>' +
+            '</label>';
+          }).join('') +
+        '</div>' +
+        '<label class="field" id="reason-note-field"' +
+          (selected === 'OTHER' ? '' : ' style="display:none"') + '>' +
+          '<span>사유를 입력해주세요</span>' +
+          '<textarea class="textarea" id="reason-note" placeholder="예) 팀 이동하면서 반납했습니다."' +
+            ' data-testid="reason-note">' + esc(state.exceptionNote || '') + '</textarea>' +
+        '</label>' +
+        '<p class="tiny muted" style="margin-top:12px">' +
+          '신고 내용은 자산관리 담당자가 확인합니다. 자산 정보는 자동으로 변경되지 않습니다.</p>' +
+      '</div>' +
+      '<div class="cta"><div class="cta-inner">' +
+        '<button class="btn btn-primary" data-action="submitException" data-testid="submit-exception"' +
+          (selected ? '' : ' disabled') + '>신고하기</button>' +
+      '</div></div>';
+  }
+
+  /* ---------------- 목록에 없는 자산 ---------------- */
+
+  function unlisted(state) {
+    var preview = state.photo && state.photo.previewUrl
+      ? '<img class="photo-preview" style="margin-top:10px" src="' + state.photo.previewUrl + '" alt="첨부 사진">'
+      : '';
+
+    return UI.appBar({ title: '목록에 없는 자산', back: 'goList' }) +
+      '<div class="wrap screen has-cta">' +
+        '<h1 class="page-title">목록에 없는 자산 등록</h1>' +
+        '<p class="page-desc">가지고 있지만 목록에 없는 자산의 Tag 번호를 입력하거나 QR 을 스캔해주세요.</p>' +
+        '<label class="field">' +
+          '<span>Tag 번호</span>' +
+          '<input class="input" id="unlisted-tag" placeholder="예) Q12345" autocomplete="off"' +
+            ' value="' + esc(state.unlistedTag || '') + '" data-testid="unlisted-tag">' +
+        '</label>' +
+        '<div class="stack" style="margin-top:10px">' +
+          '<button class="btn btn-line" data-action="scanForUnlisted" data-testid="unlisted-scan">QR 스캔으로 입력</button>' +
+          '<label class="btn btn-line" style="margin:0">' +
+            (state.photo ? '사진 다시 선택' : '사진 첨부 (선택)') +
+            '<input type="file" accept="image/*" hidden data-action="pickPhoto" data-testid="unlisted-photo">' +
+          '</label>' +
+        '</div>' +
+        preview +
+        '<label class="field">' +
+          '<span>메모 (선택)</span>' +
+          '<textarea class="textarea" id="unlisted-note" placeholder="예) 옆자리에서 넘겨받은 모니터입니다."' +
+            ' data-testid="unlisted-note">' + esc(state.unlistedNote || '') + '</textarea>' +
+        '</label>' +
+      '</div>' +
+      '<div class="cta"><div class="cta-inner">' +
+        '<button class="btn btn-primary" data-action="submitUnlisted" data-testid="submit-unlisted">등록하기</button>' +
+      '</div></div>';
+  }
+
+  /* ---------------- 전체 완료 ---------------- */
+
+  function complete(state) {
+    var p = state.data.progress;
+    return UI.appBar({ title: '실사 완료', back: 'goList' }) +
+      '<div class="wrap screen has-cta">' +
+        '<div class="result">' +
+          '<div class="result-mark mark-ok">✓</div>' +
+          '<div class="result-title" data-testid="complete-title">자산실사가 완료되었습니다</div>' +
+          '<div class="result-desc">' + esc(state.data.campaign.campaign_name) + '</div>' +
+        '</div>' +
+        '<div class="summary" data-testid="complete-summary">' +
+          '<div class="summary-row"><span>총 자산</span><span>' + p.total + '개</span></div>' +
+          '<div class="summary-row"><span>QR 확인</span><span>' + p.qr_verified + '</span></div>' +
+          '<div class="summary-row"><span>사진 제출</span><span>' + p.photo_submitted + '</span></div>' +
+          '<div class="summary-row"><span>확인 필요</span><span>' + p.not_in_possession + '</span></div>' +
+          '<div class="summary-row"><span>실사 완료일</span><span>' + UI.dateTime(p.completed_at) + '</span></div>' +
+        '</div>' +
+        '<p class="tiny muted" style="margin-top:14px">' +
+          '실사 기간 중에는 다시 접속해 상태를 확인하거나 수정할 수 있습니다.</p>' +
+      '</div>' +
+      '<div class="cta"><div class="cta-inner">' +
+        '<button class="btn btn-line" data-action="goList">내 자산 목록</button>' +
+      '</div></div>';
+  }
+
+  /* ---------------- 헬퍼 ---------------- */
+
+  function findAsset(state, assetId) {
+    if (!state.data || !assetId) return null;
+    for (var i = 0; i < state.data.assets.length; i++) {
+      if (state.data.assets[i].asset_id === assetId) return state.data.assets[i];
+    }
+    return null;
+  }
+
+  return {
+    signin: { render: signin },
+    list: { render: list },
+    detail: { render: detail },
+    scan: { render: scan, mount: scanMount, leave: scanLeave },
+    scanResult: { render: scanResult },
+    photo: { render: photo },
+    exception: { render: exception },
+    unlisted: { render: unlisted },
+    complete: { render: complete },
+    findAsset: findAsset
+  };
+})();
+</script>

@@ -1,0 +1,13 @@
+{
+  "name": "ga-asset-tests",
+  "private": true,
+  "description": "자산실사 Apps Script 웹앱 검증 도구 (배포물 아님)",
+  "scripts": {
+    "harness": "node harness/server.js --port 8110",
+    "scenarios": "node scenarios.js",
+    "ui": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0"
+  }
+}

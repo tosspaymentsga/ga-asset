@@ -1,0 +1,171 @@
+<script>
+/* =================================================================
+   QR 스캐너 (§8)
+
+   1) BarcodeDetector — 지원 브라우저(Android Chrome 등)에서 네이티브 디코딩
+   2) jsQR           — iOS Safari 포함 폴백 (벤더링, 외부 CDN 없음)
+   3) 카메라를 못 쓰는 경우 → 촬영/파일 업로드로 정지 이미지 디코딩 (app.html)
+
+   Apps Script 웹앱은 샌드박스 iframe 안에서 실행되므로 환경에 따라
+   getUserMedia 가 차단될 수 있다. 실패 사유를 구분해 대체 수단을 안내한다.
+   ================================================================= */
+var QrScanner = (function () {
+  var stream = null;
+  var rafId = null;
+  var timerId = null;
+  var detector = null;
+  var running = false;
+  var canvas = null;
+  var ctx = null;
+
+  function supported() {
+    return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+  }
+
+  function classifyError(err) {
+    var name = (err && err.name) || '';
+    if (name === 'NotAllowedError' || name === 'SecurityError') return 'PERMISSION_DENIED';
+    if (name === 'NotFoundError' || name === 'DevicesNotFoundError') return 'NO_CAMERA';
+    if (name === 'NotReadableError' || name === 'TrackStartError') return 'CAMERA_BUSY';
+    return 'UNAVAILABLE';
+  }
+
+  function ensureDetector() {
+    if (detector !== null) return Promise.resolve(detector);
+    if (typeof window.BarcodeDetector !== 'function') {
+      detector = false;
+      return Promise.resolve(false);
+    }
+    return window.BarcodeDetector.getSupportedFormats()
+      .then(function (formats) {
+        detector = formats.indexOf('qr_code') >= 0
+          ? new window.BarcodeDetector({ formats: ['qr_code'] })
+          : false;
+        return detector;
+      })
+      .catch(function () {
+        detector = false;
+        return false;
+      });
+  }
+
+  /**
+   * @param {HTMLVideoElement} video
+   * @param {function(string)} onResult  디코딩된 원본 문자열
+   * @param {function(string)} onError   실패 코드
+   */
+  function start(video, onResult, onError) {
+    if (!supported()) {
+      onError('UNSUPPORTED');
+      return;
+    }
+    running = true;
+
+    navigator.mediaDevices
+      .getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 } },
+        audio: false
+      })
+      .then(function (mediaStream) {
+        if (!running) {
+          mediaStream.getTracks().forEach(function (t) { t.stop(); });
+          return;
+        }
+        stream = mediaStream;
+        video.srcObject = mediaStream;
+        video.setAttribute('playsinline', 'true');
+        video.muted = true;
+        return video.play().catch(function () { /* 자동재생 제한은 무시 */ });
+      })
+      .then(function () {
+        if (!running) return;
+        return ensureDetector();
+      })
+      .then(function () {
+        if (!running) return;
+        loop(video, onResult);
+      })
+      .catch(function (err) {
+        running = false;
+        onError(classifyError(err));
+      });
+  }
+
+  function loop(video, onResult) {
+    if (!running) return;
+
+    var tick = function () {
+      if (!running) return;
+      if (video.readyState < 2 || !video.videoWidth) {
+        rafId = requestAnimationFrame(tick);
+        return;
+      }
+      scanFrame(video)
+        .then(function (value) {
+          if (!running) return;
+          if (value) {
+            onResult(value);
+          } else {
+            // 과도한 CPU 사용을 피하기 위해 프레임 간 간격을 둔다
+            timerId = setTimeout(function () { rafId = requestAnimationFrame(tick); }, 110);
+          }
+        })
+        .catch(function () {
+          if (!running) return;
+          timerId = setTimeout(function () { rafId = requestAnimationFrame(tick); }, 200);
+        });
+    };
+    rafId = requestAnimationFrame(tick);
+  }
+
+  function scanFrame(video) {
+    if (detector) {
+      return detector.detect(video).then(function (codes) {
+        return codes && codes.length ? codes[0].rawValue : null;
+      });
+    }
+    if (typeof jsQR !== 'function') return Promise.resolve(null);
+
+    if (!canvas) {
+      canvas = document.createElement('canvas');
+      ctx = canvas.getContext('2d', { willReadFrequently: true });
+    }
+    // 성능을 위해 최대 640px 로 축소해서 디코딩한다
+    var scale = Math.min(1, 640 / Math.max(video.videoWidth, video.videoHeight));
+    canvas.width = Math.round(video.videoWidth * scale);
+    canvas.height = Math.round(video.videoHeight * scale);
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    var image = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    var found = jsQR(image.data, image.width, image.height, {
+      inversionAttempts: 'dontInvert'
+    });
+    return Promise.resolve(found && found.data ? found.data : null);
+  }
+
+  function stop() {
+    running = false;
+    if (rafId) cancelAnimationFrame(rafId);
+    if (timerId) clearTimeout(timerId);
+    rafId = null;
+    timerId = null;
+    if (stream) {
+      stream.getTracks().forEach(function (track) { track.stop(); });
+      stream = null;
+    }
+  }
+
+  var MESSAGES = {
+    UNSUPPORTED: '이 브라우저에서는 카메라를 사용할 수 없습니다.',
+    PERMISSION_DENIED: '카메라 권한이 허용되지 않았습니다.',
+    NO_CAMERA: '사용할 수 있는 카메라를 찾지 못했습니다.',
+    CAMERA_BUSY: '다른 앱이 카메라를 사용 중입니다.',
+    UNAVAILABLE: '카메라를 시작하지 못했습니다.'
+  };
+
+  function message(code) {
+    return MESSAGES[code] || MESSAGES.UNAVAILABLE;
+  }
+
+  return { start: start, stop: stop, supported: supported, message: message };
+})();
+</script>

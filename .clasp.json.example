@@ -1,0 +1,20 @@
+{
+  "scriptId": "여기에-Apps-Script-프로젝트-ID를-입력하세요",
+  "rootDir": "src",
+  "filePushOrder": [
+    "src/appsscript.json",
+    "src/server/config.gs",
+    "src/server/util.gs",
+    "src/server/auth.gs",
+    "src/server/repository.gs",
+    "src/server/mockRepository.gs",
+    "src/server/sheetRepository.gs",
+    "src/server/mockStorage.gs",
+    "src/server/driveService.gs",
+    "src/server/assetService.gs",
+    "src/server/auditService.gs",
+    "src/server/adminService.gs",
+    "src/server/setup.gs",
+    "src/server/main.gs"
+  ]
+}

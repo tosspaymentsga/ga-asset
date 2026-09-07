@@ -1,0 +1,598 @@
+<script>
+/* =================================================================
+   API (google.script.run Promise 래퍼) + 상태/라우팅/액션 (§20, §21)
+   ================================================================= */
+var API = (function () {
+  var GENERIC = '서버와 통신하지 못했습니다. 잠시 후 다시 시도해주세요.';
+
+  function ApiError(message, code) {
+    this.name = 'ApiError';
+    this.message = message || GENERIC;
+    this.code = code || 'UNKNOWN';
+  }
+  ApiError.prototype = Object.create(Error.prototype);
+
+  function call(fnName, args) {
+    return new Promise(function (resolve, reject) {
+      if (!window.google || !google.script || !google.script.run) {
+        reject(new ApiError('서버에 연결할 수 없습니다. 페이지를 새로고침해주세요.', 'NO_RUNTIME'));
+        return;
+      }
+      var runner = google.script.run
+        .withSuccessHandler(function (res) {
+          // 서버는 항상 { ok, data } 또는 { ok:false, code, message } 를 반환한다
+          if (res && res.ok) resolve(res.data);
+          else reject(new ApiError(res && res.message, res && res.code));
+        })
+        .withFailureHandler(function () {
+          // Apps Script 내부 오류 문자열은 사용자에게 노출하지 않는다
+          reject(new ApiError(GENERIC, 'TRANSPORT'));
+        });
+      try {
+        runner[fnName].apply(runner, args || []);
+      } catch (err) {
+        reject(new ApiError(GENERIC, 'TRANSPORT'));
+      }
+    });
+  }
+
+  return {
+    ApiError: ApiError,
+    getMyAssets: function () { return call('getMyAssets'); },
+    verifyQr: function (tag, assetId) { return call('verifyQr', [tag, assetId || '']); },
+    registerForeignScan: function (tag, assetId) {
+      return call('registerForeignScan', [tag, assetId || '']);
+    },
+    submitPhoto: function (assetId, base64, mime) {
+      return call('submitPhoto', [assetId, base64, mime]);
+    },
+    submitException: function (assetId, type, note) {
+      return call('submitException', [assetId, type, note || '']);
+    },
+    submitUnlistedAsset: function (tag, note, base64, mime) {
+      return call('submitUnlistedAsset', [tag, note || '', base64 || '', mime || '']);
+    },
+    getPhotoDataUrl: function (fileId) { return call('getPhotoDataUrl', [fileId]); },
+    getAdminDashboard: function (campaignId) {
+      return call('getAdminDashboard', [campaignId || '']);
+    },
+    getAdminAuditList: function (filters) { return call('getAdminAuditList', [filters]); },
+    getAdminReconciliation: function (filters) {
+      return call('getAdminReconciliation', [filters]);
+    },
+    resolveReviewItem: function (key, state, note) {
+      return call('resolveReviewItem', [key, state, note || '']);
+    },
+    devSignInAs: function (email) { return call('devSignInAs', [email]); },
+    devResetMyAudit: function () { return call('devResetMyAudit'); }
+  };
+})();
+
+/* ================================================================= */
+
+var App = (function () {
+  var state = {
+    view: 'list',
+    data: null,
+    demoUsers: [],
+    authMessage: '',
+    assetId: null,
+    scanMode: 'asset',      // 'asset' | 'unlisted'
+    scanResult: null,
+    photo: null,
+    exceptionType: '',
+    exceptionNote: '',
+    unlistedTag: '',
+    unlistedNote: '',
+    admin: {
+      tab: 'dashboard',
+      dashboard: null,
+      list: null,
+      recon: null,
+      filters: { campaignId: '', department: '', status: '', method: '', query: '', page: 1 },
+      reconFilters: { campaignId: '', category: '', state: '', query: '' },
+      focusKey: ''
+    }
+  };
+
+  var VIEWS = {
+    signin: function () { return EmployeeViews.signin; },
+    list: function () { return EmployeeViews.list; },
+    detail: function () { return EmployeeViews.detail; },
+    scan: function () { return EmployeeViews.scan; },
+    scanResult: function () { return EmployeeViews.scanResult; },
+    photo: function () { return EmployeeViews.photo; },
+    exception: function () { return EmployeeViews.exception; },
+    unlisted: function () { return EmployeeViews.unlisted; },
+    complete: function () { return EmployeeViews.complete; },
+    adminDashboard: function () { return AdminViews.dashboard; },
+    adminList: function () { return AdminViews.adminList; },
+    adminRecon: function () { return AdminViews.recon; }
+  };
+
+  var current = null;
+
+  function demoBar() {
+    if (!state.data || !state.data.user.isMockSession) return '';
+    var users = state.demoUsers || [];
+    return '<div class="demo-bar" data-testid="demo-bar">' +
+      '<span>PoC 데모</span>' +
+      '<select data-action="switchUser" aria-label="데모 계정 전환">' +
+        users.map(function (u) {
+          return '<option value="' + UI.esc(u.email) + '"' +
+            (u.email === state.data.user.email ? ' selected' : '') + '>' +
+            UI.esc(u.name) + '</option>';
+        }).join('') +
+      '</select>' +
+      '<button data-action="resetDemo">초기화</button>' +
+    '</div>';
+  }
+
+  function render() {
+    if (current && current.leave) current.leave();
+    var factory = VIEWS[state.view] || VIEWS.list;
+    var def = factory();
+    var isAdminView = state.view.indexOf('admin') === 0;
+
+    var root = document.getElementById('app');
+    root.className = isAdminView ? 'admin-body' : '';
+    root.innerHTML = (isAdminView ? '' : demoBar()) + def.render(state);
+
+    current = def;
+    if (def.mount) def.mount(state);
+    restoreFocus();
+    window.scrollTo(0, 0);
+  }
+
+  function restoreFocus() {
+    if (!state.admin.focusKey) return;
+    var el = document.querySelector('[data-action="' + state.admin.focusKey + '"]');
+    if (el && el.focus) {
+      el.focus();
+      if (el.setSelectionRange && typeof el.value === 'string') {
+        var end = el.value.length;
+        try { el.setSelectionRange(end, end); } catch (e) { /* noop */ }
+      }
+    }
+    state.admin.focusKey = '';
+  }
+
+  function go(view, patch) {
+    if (patch) {
+      for (var k in patch) state[k] = patch[k];
+    }
+    state.view = view;
+    render();
+  }
+
+  function fail(err) {
+    UI.toast((err && err.message) || '처리에 실패했습니다.', true);
+  }
+
+  /** 서버에서 내 자산 데이터를 다시 받아온다 */
+  function refresh() {
+    return API.getMyAssets().then(function (data) {
+      state.data = data;
+      return data;
+    });
+  }
+
+  /* ---------------- QR 값 처리 ---------------- */
+
+  function handleScanValue(value) {
+    if (state.scanMode === 'unlisted') {
+      state.unlistedTag = String(value || '').trim();
+      go('unlisted');
+      UI.toast('Tag 를 입력했습니다.');
+      return;
+    }
+    go('scanResult', { scanResult: null });
+    document.getElementById('app').innerHTML = UI.loading('자산을 확인하는 중입니다');
+
+    API.verifyQr(value, state.assetId)
+      .then(function (result) {
+        state.scanResult = result;
+        if (result.result === 'MATCHED') {
+          return refresh().then(function () { go('scanResult'); });
+        }
+        go('scanResult');
+      })
+      .catch(function (err) {
+        state.scanResult = { result: 'FAILED', message: err.message };
+        go('scanResult');
+      });
+  }
+
+  /* ---------------- 액션 ---------------- */
+
+  var Actions = {
+    /* 이동 */
+    goList: function () { go('list', { assetId: null, photo: null, scanMode: 'asset' }); },
+    goDetail: function () { go('detail', { photo: null }); },
+    goComplete: function () { go('complete'); },
+    goScan: function () { go('scan', { scanMode: 'asset', scanResult: null }); },
+    backFromScan: function () {
+      if (state.scanMode === 'unlisted') { go('unlisted'); return; }
+      state.assetId ? go('detail') : go('list');
+    },
+    goPhoto: function () { go('photo', { photo: null }); },
+    goException: function () {
+      go('exception', { exceptionType: '', exceptionNote: '' });
+    },
+    goUnlisted: function () {
+      go('unlisted', { photo: null, scanMode: 'asset' });
+    },
+    goAdmin: function () { Actions.adminDashboard(); },
+
+    openAsset: function (el) {
+      go('detail', { assetId: el.getAttribute('data-asset'), photo: null });
+    },
+
+    scanForAsset: function () { go('scan', { scanMode: 'asset', scanResult: null }); },
+
+    scanForUnlisted: function () {
+      captureUnlistedInputs();
+      go('scan', { scanMode: 'unlisted', scanResult: null });
+    },
+
+    /* 로그인 (데모) */
+    signInAs: function (el) {
+      var email = el.getAttribute('data-email');
+      document.getElementById('app').innerHTML = UI.loading('접속하는 중입니다');
+      API.devSignInAs(email)
+        .then(function (data) { go('list', { data: data, assetId: null }); })
+        .catch(function (err) { fail(err); go('signin'); });
+    },
+
+    switchUser: function (el) {
+      var email = el.value;
+      API.devSignInAs(email)
+        .then(function (data) { go('list', { data: data, assetId: null }); })
+        .catch(fail);
+    },
+
+    resetDemo: function () {
+      API.devResetMyAudit()
+        .then(function (data) {
+          go('list', { data: data, assetId: null });
+          UI.toast('내 실사 기록을 초기화했습니다.');
+        })
+        .catch(fail);
+    },
+
+    /* QR */
+    devTagSubmit: function () {
+      var input = document.getElementById('dev-tag');
+      var value = input ? input.value.trim() : '';
+      if (!value) { UI.toast('Tag 번호를 입력해주세요.', true); return; }
+      QrScanner.stop();
+      handleScanValue(value);
+    },
+
+    decodeFromFile: function (el) {
+      var file = el.files && el.files[0];
+      if (!file) return;
+      UI.toast('사진에서 QR 을 찾는 중입니다');
+      PhotoUtil.decodeQrFromFile(file)
+        .then(function (value) {
+          QrScanner.stop();
+          if (!value) {
+            state.scanResult = {
+              result: 'FAILED',
+              message: '사진에서 QR 을 찾지 못했습니다. Tag 가 선명하게 보이도록 다시 촬영해주세요.'
+            };
+            go('scanResult');
+            return;
+          }
+          handleScanValue(value);
+        })
+        .catch(function () {
+          state.scanResult = { result: 'FAILED', message: '사진을 읽지 못했습니다.' };
+          go('scanResult');
+        });
+    },
+
+    registerForeign: function (el) {
+      var tag = el.getAttribute('data-tag');
+      UI.busy(el, true, '등록 중');
+      API.registerForeignScan(tag, state.assetId)
+        .then(function (res) {
+          return refresh().then(function () {
+            go('list', { assetId: null, scanResult: null });
+            UI.toast(res.already
+              ? '이미 등록된 자산입니다.'
+              : '확인 필요 자산으로 등록했습니다.');
+          });
+        })
+        .catch(function (err) { UI.busy(el, false); fail(err); });
+    },
+
+    verifyScannedInstead: function (el) {
+      var tag = el.getAttribute('data-tag');
+      state.assetId = null;
+      handleScanValue(tag);
+    },
+
+    /* 사진 */
+    pickPhoto: function (el) {
+      var file = el.files && el.files[0];
+      if (!file) return;
+      UI.toast('사진을 준비하는 중입니다');
+      if (state.view === 'unlisted') captureUnlistedInputs();
+      PhotoUtil.prepare(file)
+        .then(function (photo) {
+          state.photo = photo;
+          render();
+        })
+        .catch(function () {
+          UI.toast('사진을 읽지 못했습니다. 다른 사진을 선택해주세요.', true);
+        });
+    },
+
+    submitPhoto: function (el) {
+      if (!state.photo) return;
+      UI.busy(el, true, '제출 중');
+      API.submitPhoto(state.assetId, state.photo.base64, state.photo.mimeType)
+        .then(function () {
+          return refresh().then(function () {
+            state.photo = null;
+            if (state.data.progress.completed) go('complete');
+            else go('detail');
+            UI.toast('사진을 제출했습니다.');
+          });
+        })
+        .catch(function (err) { UI.busy(el, false); fail(err); });
+    },
+
+    /* 미보유 신고 */
+    pickReason: function (el) {
+      var note = document.getElementById('reason-note');
+      state.exceptionNote = note ? note.value : state.exceptionNote;
+      state.exceptionType = el.value;
+      render();
+    },
+
+    submitException: function (el) {
+      var note = document.getElementById('reason-note');
+      state.exceptionNote = note ? note.value : '';
+      UI.busy(el, true, '신고 중');
+      API.submitException(state.assetId, state.exceptionType, state.exceptionNote)
+        .then(function () {
+          return refresh().then(function () {
+            if (state.data.progress.completed) go('complete');
+            else go('detail');
+            UI.toast('보유하지 않음으로 신고했습니다.');
+          });
+        })
+        .catch(function (err) { UI.busy(el, false); fail(err); });
+    },
+
+    /* 목록에 없는 자산 */
+    submitUnlisted: function (el) {
+      captureUnlistedInputs();
+      if (!state.unlistedTag) {
+        UI.toast('Tag 번호를 입력해주세요.', true);
+        return;
+      }
+      UI.busy(el, true, '등록 중');
+      API.submitUnlistedAsset(
+        state.unlistedTag,
+        state.unlistedNote,
+        state.photo ? state.photo.base64 : '',
+        state.photo ? state.photo.mimeType : ''
+      )
+        .then(function (res) {
+          return refresh().then(function () {
+            go('list', { photo: null, unlistedTag: '', unlistedNote: '' });
+            UI.toast(res.already ? '이미 등록된 Tag 입니다.' : '목록에 없는 자산으로 등록했습니다.');
+          });
+        })
+        .catch(function (err) { UI.busy(el, false); fail(err); });
+    },
+
+    /* ---------------- 관리자 ---------------- */
+
+    adminDashboard: function () {
+      state.admin.tab = 'dashboard';
+      go('adminDashboard', {});
+      API.getAdminDashboard(state.admin.filters.campaignId)
+        .then(function (d) {
+          state.admin.dashboard = d;
+          if (!state.admin.filters.campaignId) {
+            state.admin.filters.campaignId = d.campaign.campaign_id;
+            state.admin.reconFilters.campaignId = d.campaign.campaign_id;
+          }
+          render();
+        })
+        .catch(fail);
+    },
+
+    adminList: function () {
+      state.admin.tab = 'list';
+      go('adminList', {});
+      loadAdminList();
+    },
+
+    adminRecon: function () {
+      state.admin.tab = 'recon';
+      go('adminRecon', {});
+      loadRecon();
+    },
+
+    changeCampaign: function (el) {
+      state.admin.filters.campaignId = el.value;
+      state.admin.reconFilters.campaignId = el.value;
+      state.admin.filters.page = 1;
+      state.admin.dashboard = null;
+      if (state.view === 'adminDashboard') Actions.adminDashboard();
+      else if (state.view === 'adminList') loadAdminList();
+      else loadRecon();
+    },
+
+    changeFilter: function (el) {
+      state.admin.filters[el.getAttribute('data-key')] = el.value;
+      state.admin.filters.page = 1;
+      loadAdminList();
+    },
+
+    changePage: function (el) {
+      state.admin.filters.page = Number(el.getAttribute('data-page')) || 1;
+      loadAdminList();
+    },
+
+    searchInput: debounce(function (el) {
+      state.admin.filters.query = el.value;
+      state.admin.filters.page = 1;
+      state.admin.focusKey = 'searchInput';
+      loadAdminList();
+    }, 320),
+
+    changeReconFilter: function (el) {
+      var key = el.getAttribute('data-key');
+      var value = el.tagName === 'SELECT' ? el.value : el.getAttribute('data-value');
+      state.admin.reconFilters[key] = value;
+      loadRecon();
+    },
+
+    reconSearchInput: debounce(function (el) {
+      state.admin.reconFilters.query = el.value;
+      state.admin.focusKey = 'reconSearchInput';
+      loadRecon();
+    }, 320),
+
+    resolveReview: function (el) {
+      var key = el.getAttribute('data-key');
+      var next = el.getAttribute('data-state');
+      UI.busy(el, true, '처리 중');
+      API.resolveReviewItem(key, next, '')
+        .then(function () {
+          state.admin.dashboard = null;
+          return loadRecon().then(function () { UI.toast('처리했습니다.'); });
+        })
+        .catch(function (err) { UI.busy(el, false); fail(err); });
+    },
+
+    viewPhoto: function (el) {
+      var fileId = el.getAttribute('data-file');
+      UI.busy(el, true, '불러오는 중');
+      API.getPhotoDataUrl(fileId)
+        .then(function (dataUrl) {
+          UI.busy(el, false);
+          PhotoModal.open(
+            dataUrl
+              ? '<img src="' + dataUrl + '" alt="증빙 사진" style="width:100%;border-radius:10px;display:block">'
+              : '<div class="notice">미리보기를 불러오지 못했습니다. (데모 모드에서는 임시 저장된 사진만 표시됩니다)</div>'
+          );
+        })
+        .catch(function (err) { UI.busy(el, false); fail(err); });
+    },
+
+    closePhoto: function () { PhotoModal.close(); }
+  };
+
+  function loadAdminList() {
+    return API.getAdminAuditList(state.admin.filters)
+      .then(function (res) {
+        state.admin.list = res;
+        render();
+      })
+      .catch(fail);
+  }
+
+  function loadRecon() {
+    return API.getAdminReconciliation(state.admin.reconFilters)
+      .then(function (res) {
+        state.admin.recon = res;
+        render();
+      })
+      .catch(fail);
+  }
+
+  function captureUnlistedInputs() {
+    var tag = document.getElementById('unlisted-tag');
+    var note = document.getElementById('unlisted-note');
+    if (tag) state.unlistedTag = tag.value.trim();
+    if (note) state.unlistedNote = note.value;
+  }
+
+  function debounce(fn, wait) {
+    var timer = null;
+    return function (el) {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(function () { fn(el); }, wait);
+    };
+  }
+
+  /* ---------------- 이벤트 위임 ---------------- */
+
+  function bind() {
+    var root = document.body;
+
+    root.addEventListener('click', function (event) {
+      var el = event.target.closest('[data-action]');
+      if (!el) return;
+      if (el.tagName === 'INPUT' || el.tagName === 'SELECT' || el.tagName === 'TEXTAREA') return;
+      var name = el.getAttribute('data-action');
+      if (!Actions[name]) return;
+      event.preventDefault();
+      Actions[name](el);
+    });
+
+    // change 로 처리하는 입력 종류.
+    // 텍스트 입력은 input 이벤트에서만 처리한다. change 까지 받으면,
+    // 재렌더로 포커스된 입력이 제거될 때 change 가 다시 발생해
+    // 무한 재렌더 루프가 생긴다.
+    var CHANGE_INPUT_TYPES = ['radio', 'checkbox', 'file'];
+
+    root.addEventListener('change', function (event) {
+      var el = event.target.closest('[data-action]');
+      if (!el) return;
+      var isSelect = el.tagName === 'SELECT';
+      var isPicker =
+        el.tagName === 'INPUT' && CHANGE_INPUT_TYPES.indexOf(el.type) >= 0;
+      if (!isSelect && !isPicker) return;
+      var name = el.getAttribute('data-action');
+      if (!Actions[name]) return;
+      Actions[name](el);
+    });
+
+    root.addEventListener('input', function (event) {
+      var el = event.target.closest('[data-action]');
+      if (!el) return;
+      var name = el.getAttribute('data-action');
+      if (name !== 'searchInput' && name !== 'reconSearchInput') return;
+      Actions[name](el);
+    });
+  }
+
+  /* ---------------- 부팅 ---------------- */
+
+  function boot() {
+    bind();
+    var initial = window.__INITIAL_STATE__ || {};
+    state.demoUsers = initial.demoUsers || [];
+
+    if (initial.ok && initial.data) {
+      state.data = initial.data;
+      state.view = 'list';
+    } else {
+      state.authMessage = initial.message || '';
+      state.view = 'signin';
+    }
+    render();
+  }
+
+  return {
+    boot: boot,
+    go: go,
+    handleScanValue: handleScanValue,
+    state: function () { return state; }
+  };
+})();
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', App.boot);
+} else {
+  App.boot();
+}
+</script>

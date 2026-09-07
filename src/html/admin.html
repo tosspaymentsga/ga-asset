@@ -1,0 +1,384 @@
+<script>
+/* =================================================================
+   관리자 화면 (PC 중심, 모바일에서도 동작)
+   dashboard / list / reconciliation
+   ================================================================= */
+var AdminViews = (function () {
+  var esc = UI.esc;
+
+  var STATUS_OPTIONS = [
+    { value: '', label: '전체 상태' },
+    { value: 'NOT_STARTED', label: '미실사' },
+    { value: 'QR_VERIFIED', label: '완료(QR)' },
+    { value: 'PHOTO_SUBMITTED', label: '사진 제출' },
+    { value: 'NOT_IN_POSSESSION', label: '보유하지 않음' },
+    { value: 'UNLISTED_ASSET', label: '목록에 없는 자산' },
+    { value: 'REVIEW_REQUIRED', label: '확인 필요' }
+  ];
+
+  var METHOD_OPTIONS = [
+    { value: '', label: '전체 방법' },
+    { value: 'QR', label: 'QR' },
+    { value: 'PHOTO', label: '사진' },
+    { value: 'SELF_REPORT', label: '사용자 신고' }
+  ];
+
+  var REVIEW_ACTIONS = [
+    { value: 'RESOLVED_OK', label: '정상 처리' },
+    { value: 'MASTER_UPDATE_REQUIRED', label: '자산정보 수정 필요' },
+    { value: 'USER_FOLLOWUP_REQUIRED', label: '사용자 확인 필요' }
+  ];
+
+  var REVIEW_STATE_LABEL = {
+    PENDING: '미처리',
+    RESOLVED_OK: '정상 처리',
+    MASTER_UPDATE_REQUIRED: '자산정보 수정 필요',
+    USER_FOLLOWUP_REQUIRED: '사용자 확인 필요'
+  };
+
+  function chrome(state, tab, body) {
+    var tabs = [
+      { key: 'dashboard', label: 'Dashboard', action: 'adminDashboard' },
+      { key: 'list', label: '실사 현황', action: 'adminList' },
+      { key: 'recon', label: '확인 필요', action: 'adminRecon' }
+    ];
+    return UI.appBar({
+        title: '자산실사 관리자',
+        wide: true,
+        right: '<button class="icon-btn" data-action="goList" aria-label="내 자산" title="내 자산 화면">↩</button>'
+      }) +
+      '<div class="tabs">' +
+        '<div class="wrap-wide" style="display:flex;gap:2px;padding:0 24px">' +
+        tabs.map(function (t) {
+          return '<button class="tab' + (t.key === tab ? ' active' : '') + '"' +
+            ' data-action="' + t.action + '" data-testid="tab-' + t.key + '">' + t.label + '</button>';
+        }).join('') +
+        '</div>' +
+      '</div>' +
+      '<div class="wrap-wide" style="padding-top:20px;padding-bottom:40px">' + body + '</div>';
+  }
+
+  function campaignSelect(state, campaigns, current) {
+    return '<select class="select" data-action="changeCampaign" data-testid="campaign-select">' +
+      campaigns.map(function (c) {
+        return '<option value="' + esc(c.campaign_id) + '"' +
+          (c.campaign_id === current ? ' selected' : '') + '>' +
+          esc(c.campaign_name) + '</option>';
+      }).join('') +
+      '</select>';
+  }
+
+  /* ---------------- Dashboard ---------------- */
+
+  function dashboard(state) {
+    var d = state.admin.dashboard;
+    if (!d) return chrome(state, 'dashboard', UI.loading('집계 중입니다'));
+
+    var a = d.asset;
+    var u = d.user;
+    var r = d.review;
+
+    var kpi = function (label, value, cls, sub) {
+      return '<div class="kpi">' +
+        '<div class="kpi-label">' + esc(label) + '</div>' +
+        '<div class="kpi-value' + (cls ? ' ' + cls : '') + '">' + value + '</div>' +
+        (sub ? '<div class="kpi-sub">' + esc(sub) + '</div>' : '') +
+      '</div>';
+    };
+
+    var deptRows = d.by_department.map(function (row) {
+      return '<div class="dept-row">' +
+        '<span>' + esc(row.department) + '</span>' +
+        '<span>' + UI.num(row.total) + '</span>' +
+        '<span>' + UI.num(row.completed) + '</span>' +
+        '<span class="strong">' + row.completion_rate + '%</span>' +
+      '</div>';
+    }).join('');
+
+    var reconRows = [
+      ['보유하지 않음', r.by_category.NOT_IN_POSSESSION],
+      ['목록에 없는 자산', r.by_category.UNLISTED_ASSET],
+      ['내 목록에 없는 QR', r.by_category.FOREIGN_SCAN],
+      ['Tag 불일치', r.by_category.TAG_MISMATCH],
+      ['사진 검토', r.by_category.PHOTO_REVIEW]
+    ].map(function (row) {
+      return '<div class="summary-row"><span>' + esc(row[0]) + '</span><span>' +
+        UI.num(row[1]) + '</span></div>';
+    }).join('');
+
+    return chrome(state, 'dashboard',
+      '<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:16px">' +
+        '<div style="flex:1;min-width:200px">' +
+          '<div class="page-title" style="margin:0">' + esc(d.campaign.campaign_name) + '</div>' +
+          '<div class="small muted">' + esc(d.campaign.start_date) + ' ~ ' + esc(d.campaign.end_date) + '</div>' +
+        '</div>' +
+        '<div style="width:220px">' + campaignSelect(state, d.campaigns, d.campaign.campaign_id) + '</div>' +
+      '</div>' +
+
+      '<div class="kpi-grid" data-testid="kpi-assets">' +
+        kpi('전체 대상 자산', UI.num(a.total), '', 'Audit_Target 기준') +
+        kpi('실사 완료', UI.num(a.completed), 'green', 'QR 확인 + 사진 제출') +
+        kpi('미실사', UI.num(a.not_started), '', '아직 응답 없음') +
+        kpi('확인 필요', UI.num(a.review_required), 'orange', '보유하지 않음 신고') +
+      '</div>' +
+
+      '<div class="kpi-grid" style="margin-top:10px">' +
+        kpi('QR 확인', UI.num(a.qr_verified)) +
+        kpi('사진 제출', UI.num(a.photo_submitted)) +
+        kpi('실사율', a.completion_rate + '%', 'blue', '완료 / 전체 대상') +
+        kpi('미해결 검토 항목', UI.num(r.open_total), 'orange', '확인 필요 화면') +
+      '</div>' +
+
+      '<div class="kpi-grid" style="margin-top:10px">' +
+        kpi('전체 대상 사용자', UI.num(u.total)) +
+        kpi('완료 사용자', UI.num(u.completed), 'green') +
+        kpi('미완료 사용자', UI.num(u.incomplete)) +
+        kpi('사용자 완료율', u.completion_rate + '%') +
+      '</div>' +
+
+      '<div class="admin-two-col" style="margin-top:14px">' +
+        '<div class="panel">' +
+          '<div class="panel-title">부서별 실사 현황</div>' +
+          '<div class="dept-row dept-head">' +
+            '<span>부서</span><span>대상</span><span>완료</span><span>실사율</span>' +
+          '</div>' +
+          deptRows +
+        '</div>' +
+        '<div class="panel in-col">' +
+          '<div class="panel-title">확인 필요 구성</div>' +
+          '<div class="summary">' + reconRows + '</div>' +
+          '<div style="margin-top:12px">' +
+            '<button class="btn btn-line" data-action="adminRecon">확인 필요 관리로 이동</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  /* ---------------- 실사 현황 목록 ---------------- */
+
+  function auditList(state) {
+    var res = state.admin.list;
+    if (!res) return chrome(state, 'list', UI.loading('목록을 불러오는 중입니다'));
+    var f = state.admin.filters;
+
+    var options = function (list, current) {
+      return list.map(function (o) {
+        return '<option value="' + esc(o.value) + '"' +
+          (o.value === current ? ' selected' : '') + '>' + esc(o.label) + '</option>';
+      }).join('');
+    };
+
+    var deptOptions = [{ value: '', label: '전체 부서' }].concat(
+      res.facets.departments.map(function (d) { return { value: d, label: d }; })
+    );
+
+    var rows = res.rows.length
+      ? res.rows.map(function (row) {
+          return '<tr data-testid="audit-row">' +
+            '<td class="cell-strong">' + esc(row.user_name) + '<div class="cell-muted tiny">' +
+              esc(row.user_email) + '</div></td>' +
+            '<td>' + esc(row.department) + '</td>' +
+            '<td class="cell-wrap">' + esc(row.asset_name) + '</td>' +
+            '<td>' + esc(row.asset_id) + '</td>' +
+            '<td>' + esc(row.asset_tag) + '</td>' +
+            '<td>' + esc(methodLabel(row.verification_method)) + '</td>' +
+            '<td>' + UI.pill(row.status_label, row.status_tone) + '</td>' +
+            '<td class="nowrap">' + (row.verified_at ? UI.dateTime(row.verified_at) : '-') + '</td>' +
+            '<td>' + (row.photo_file_id
+              ? '<button class="btn btn-line btn-sm" data-action="viewPhoto" data-file="' +
+                esc(row.photo_file_id) + '">보기</button>'
+              : '<span class="cell-muted">-</span>') + '</td>' +
+            '<td class="cell-wrap">' +
+              (row.exception_label ? esc(row.exception_label) : '<span class="cell-muted">-</span>') +
+              (row.note ? '<div class="cell-muted tiny">' + esc(row.note) + '</div>' : '') + '</td>' +
+          '</tr>';
+        }).join('')
+      : '<tr><td colspan="10" style="text-align:center;padding:32px" class="cell-muted">' +
+        '조건에 맞는 결과가 없습니다.</td></tr>';
+
+    var totalPages = Math.max(1, Math.ceil(res.total / res.page_size));
+
+    return chrome(state, 'list',
+      '<div class="panel">' +
+        '<div class="filters">' +
+          campaignSelect(state, res.facets.campaigns, res.campaign.campaign_id) +
+          '<select class="select" data-action="changeFilter" data-key="department">' +
+            options(deptOptions, f.department || '') + '</select>' +
+          '<select class="select" data-action="changeFilter" data-key="status" data-testid="filter-status">' +
+            options(STATUS_OPTIONS, f.status || '') + '</select>' +
+          '<select class="select" data-action="changeFilter" data-key="method">' +
+            options(METHOD_OPTIONS, f.method || '') + '</select>' +
+          '<input class="input" placeholder="사용자명 · 이메일 · 자산번호 · Tag 검색"' +
+            ' value="' + esc(f.query || '') + '" data-action="searchInput" data-testid="admin-search">' +
+        '</div>' +
+        '<div class="small muted" style="margin-top:12px" data-testid="list-total">' +
+          '총 ' + UI.num(res.total) + '건 · ' + res.page + ' / ' + totalPages + ' 페이지' +
+        '</div>' +
+      '</div>' +
+
+      '<div class="panel" style="margin-top:14px;padding:0;overflow:hidden">' +
+        '<div class="table-scroll">' +
+          '<table class="grid">' +
+            '<thead><tr>' +
+              '<th>사용자</th><th>부서</th><th>자산명</th><th>자산번호</th><th>Tag</th>' +
+              '<th>실사방법</th><th>상태</th><th>실사일시</th><th>증빙</th><th>예외사유</th>' +
+            '</tr></thead>' +
+            '<tbody>' + rows + '</tbody>' +
+          '</table>' +
+        '</div>' +
+      '</div>' +
+
+      (totalPages > 1
+        ? '<div class="btn-row" style="margin-top:14px;justify-content:center">' +
+            '<button class="btn btn-line btn-sm" data-action="changePage" data-page="' +
+              (res.page - 1) + '"' + (res.page <= 1 ? ' disabled' : '') + '>이전</button>' +
+            '<button class="btn btn-line btn-sm" data-action="changePage" data-page="' +
+              (res.page + 1) + '"' + (res.page >= totalPages ? ' disabled' : '') + '>다음</button>' +
+          '</div>'
+        : '')
+    );
+  }
+
+  /* ---------------- Reconciliation ---------------- */
+
+  function reconciliation(state) {
+    var res = state.admin.recon;
+    if (!res) return chrome(state, 'recon', UI.loading('확인 필요 항목을 불러오는 중입니다'));
+    var f = state.admin.reconFilters;
+
+    var categories = [
+      { key: '', label: '전체' },
+      { key: 'NOT_IN_POSSESSION', label: '보유하지 않음' },
+      { key: 'UNLISTED_ASSET', label: '목록에 없는 자산' },
+      { key: 'FOREIGN_SCAN', label: '내 목록에 없는 QR' },
+      { key: 'TAG_MISMATCH', label: 'Tag 불일치' },
+      { key: 'PHOTO_REVIEW', label: '사진 검토' }
+    ];
+
+    var chips = categories.map(function (c) {
+      var count = c.key ? res.counts[c.key] : res.open_total;
+      return '<button class="btn btn-line btn-sm"' +
+        (f.category === c.key ? ' style="border-color:var(--ink);color:var(--ink)"' : '') +
+        ' data-action="changeReconFilter" data-key="category" data-value="' + esc(c.key) + '"' +
+        ' data-testid="recon-cat-' + esc(c.key || 'all') + '">' +
+        esc(c.label) + ' <span class="muted">' + count + '</span></button>';
+    }).join('');
+
+    var items = res.items.length
+      ? res.items.map(function (item) {
+          var pending = item.review_state === 'PENDING';
+          return '<div class="recon-card" data-testid="recon-item">' +
+            '<div class="recon-head">' +
+              '<div style="min-width:0">' +
+                '<div class="strong">' + esc(item.user_name) +
+                  ' <span class="muted small">' + esc(item.department) + '</span></div>' +
+                '<div class="small muted">' + esc(item.user_email) + '</div>' +
+              '</div>' +
+              '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">' +
+                UI.pill(item.category_label, pending ? 'warn' : 'idle') +
+                (pending ? '' : UI.pill(REVIEW_STATE_LABEL[item.review_state] || '', 'done')) +
+              '</div>' +
+            '</div>' +
+
+            '<div class="summary" style="margin-top:12px">' +
+              '<div class="summary-row"><span>자산</span><span>' + esc(item.asset_name) +
+                (item.asset_id && item.asset_id !== '-' ? ' · ' + esc(item.asset_id) : '') + '</span></div>' +
+              '<div class="summary-row"><span>Tag</span><span>' + esc(item.asset_tag || '-') + '</span></div>' +
+              '<div class="summary-row"><span>사유</span><span>' +
+                esc(item.exception_label ||
+                  (item.category === 'PHOTO_REVIEW' ? '사진 증빙 검토' : '-')) +
+              '</span></div>' +
+              '<div class="summary-row"><span>신고일시</span><span>' + UI.dateTime(item.created_at) + '</span></div>' +
+            '</div>' +
+
+            (item.note ? '<div class="hint-box">' + esc(item.note) + '</div>' : '') +
+            (item.master_hint ? '<div class="hint-box">' + esc(item.master_hint) + '</div>' : '') +
+            (item.review_note ? '<div class="hint-box">처리 메모: ' + esc(item.review_note) + '</div>' : '') +
+            (item.reviewed_by
+              ? '<div class="tiny muted" style="margin-top:8px">' + esc(item.reviewed_by) + ' · ' +
+                UI.dateTime(item.reviewed_at) + '</div>'
+              : '') +
+
+            '<div class="recon-actions">' +
+              (item.photo_file_id
+                ? '<button class="btn btn-line btn-sm" data-action="viewPhoto" data-file="' +
+                  esc(item.photo_file_id) + '">증빙 보기</button>'
+                : '') +
+              REVIEW_ACTIONS.map(function (act) {
+                return '<button class="btn ' +
+                  (item.review_state === act.value ? 'btn-primary' : 'btn-line') + ' btn-sm"' +
+                  ' data-action="resolveReview" data-key="' + esc(item.key) + '"' +
+                  ' data-state="' + esc(act.value) + '"' +
+                  ' data-testid="resolve-' + esc(act.value) + '">' + esc(act.label) + '</button>';
+              }).join('') +
+            '</div>' +
+          '</div>';
+        }).join('')
+      : '<div class="panel"><div class="center-box">확인이 필요한 항목이 없습니다.</div></div>';
+
+    return chrome(state, 'recon',
+      '<div class="panel">' +
+        '<div class="panel-title">확인 필요</div>' +
+        '<p class="small muted" style="margin:-6px 0 12px">' +
+          '실사 완료율보다 중요한 것은 자산대장과 현실의 차이를 찾아내는 것입니다. ' +
+          '이 단계에서는 Asset_Master 를 자동으로 수정하지 않습니다.' +
+        '</p>' +
+        '<div class="btn-row" style="flex-wrap:wrap">' + chips + '</div>' +
+        '<div class="filters" style="margin-top:12px">' +
+          '<select class="select" data-action="changeReconFilter" data-key="state">' +
+            [{ value: '', label: '전체 처리상태' },
+             { value: 'PENDING', label: '미처리' },
+             { value: 'RESOLVED_OK', label: '정상 처리' },
+             { value: 'MASTER_UPDATE_REQUIRED', label: '자산정보 수정 필요' },
+             { value: 'USER_FOLLOWUP_REQUIRED', label: '사용자 확인 필요' }].map(function (o) {
+              return '<option value="' + esc(o.value) + '"' +
+                (o.value === (f.state || '') ? ' selected' : '') + '>' + esc(o.label) + '</option>';
+            }).join('') +
+          '</select>' +
+          '<input class="input" placeholder="사용자 · 이메일 · 자산번호 · Tag 검색"' +
+            ' value="' + esc(f.query || '') + '" data-action="reconSearchInput">' +
+        '</div>' +
+      '</div>' +
+      '<div class="recon-list" style="margin-top:14px">' + items + '</div>'
+    );
+  }
+
+  function methodLabel(method) {
+    if (method === 'QR') return 'QR';
+    if (method === 'PHOTO') return '사진';
+    if (method === 'SELF_REPORT') return '사용자 신고';
+    return '-';
+  }
+
+  return {
+    dashboard: { render: dashboard },
+    adminList: { render: auditList },
+    recon: { render: reconciliation }
+  };
+})();
+
+/* ---------------- 사진 미리보기 모달 ---------------- */
+var PhotoModal = (function () {
+  function open(html) {
+    close();
+    var el = document.createElement('div');
+    el.id = 'photo-modal';
+    el.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(16,18,22,.72);' +
+      'display:flex;align-items:center;justify-content:center;padding:20px';
+    el.innerHTML =
+      '<div style="background:#fff;border-radius:14px;max-width:520px;width:100%;' +
+      'max-height:86vh;overflow:auto;padding:16px">' + html +
+      '<button class="btn btn-line" style="margin-top:12px" data-action="closePhoto">닫기</button></div>';
+    document.body.appendChild(el);
+    el.addEventListener('click', function (e) {
+      if (e.target === el) close();
+    });
+  }
+  function close() {
+    var el = document.getElementById('photo-modal');
+    if (el) el.remove();
+  }
+  return { open: open, close: close };
+})();
+</script>
