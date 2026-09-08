@@ -10,3 +10,6 @@ playwright-report/
 screenshots/
 
 .DS_Store
+
+# 배포 패키지 (필요 시 재생성: node tools/build-flat.js)
+dist/*.zip

@@ -1,0 +1,214 @@
+<script>
+/* =================================================================
+   공용 UI 헬퍼 (프레임워크 없이 문자열 템플릿 + 이벤트 위임)
+   ================================================================= */
+var UI = (function () {
+  function esc(value) {
+    if (value === null || value === undefined) return '';
+    return String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function pad(n) { return n < 10 ? '0' + n : String(n); }
+
+  /** 2026.09.08 14:32 */
+  function dateTime(iso) {
+    if (!iso) return '-';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return '-';
+    return d.getFullYear() + '.' + pad(d.getMonth() + 1) + '.' + pad(d.getDate()) +
+      ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+
+  /** 2026.09.08 */
+  function date(iso) {
+    if (!iso) return '-';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return String(iso);
+    return d.getFullYear() + '.' + pad(d.getMonth() + 1) + '.' + pad(d.getDate());
+  }
+
+  function num(value) {
+    return Number(value || 0).toLocaleString('ko-KR');
+  }
+
+  function pill(label, tone) {
+    return '<span class="pill pill-' + esc(tone || 'idle') + '">' + esc(label) + '</span>';
+  }
+
+  /** 상단 앱바. back 이 있으면 뒤로가기 버튼 노출 */
+  function appBar(options) {
+    var o = options || {};
+    var left = o.back
+      ? '<button class="icon-btn" data-action="' + esc(o.back) + '" aria-label="뒤로">‹</button>'
+      : '<span style="width:8px"></span>';
+    var right = o.right || '<span style="width:40px"></span>';
+    return '<div class="appbar"><div class="appbar-inner' + (o.wide ? ' wide' : '') + '">' +
+      left +
+      '<div class="appbar-title">' + esc(o.title || '') + '</div>' +
+      right +
+      '</div></div>';
+  }
+
+  /** 진행률 카드 */
+  function progressCard(progress) {
+    var pct = progress.total ? Math.round((progress.responded / progress.total) * 100) : 0;
+    var done = progress.completed;
+    return '' +
+      '<div class="progress-card">' +
+        '<div class="progress-head">' +
+          '<span class="progress-label">진행률</span>' +
+          '<span class="progress-count" data-testid="progress-count">' +
+            '<em>' + progress.responded + '</em> / ' + progress.total + ' 완료' +
+          '</span>' +
+        '</div>' +
+        '<div class="bar' + (done ? ' is-done' : '') + '"><i style="width:' + pct + '%"></i></div>' +
+      '</div>';
+  }
+
+  /** 자산 카드 (직원 화면 — 최소 정보만) */
+  function assetCard(asset) {
+    return '' +
+      '<button class="asset-card" data-action="openAsset" data-asset="' + esc(asset.asset_id) + '"' +
+        ' data-testid="asset-card">' +
+        '<span class="asset-main">' +
+          '<span class="asset-name">' + esc(asset.asset_name) + '</span>' +
+          '<span class="asset-meta">' +
+            '<span>자산번호 ' + esc(asset.asset_id) + '</span>' +
+            '<span>Tag ' + esc(asset.asset_tag) + '</span>' +
+          '</span>' +
+        '</span>' +
+        '<span class="asset-side">' +
+          pill(asset.status_label, asset.status_tone) +
+          '<span class="chev">›</span>' +
+        '</span>' +
+      '</button>';
+  }
+
+  function loading(message) {
+    return '<div class="center-box"><div class="spinner spinner-dark"></div>' +
+      esc(message || '불러오는 중입니다') + '</div>';
+  }
+
+  var toastTimer = null;
+  function toast(message, isError) {
+    var host = document.getElementById('toast-host');
+    if (!host) return;
+    host.innerHTML = '<div class="toast' + (isError ? ' toast-error' : '') + '">' +
+      esc(message) + '</div>';
+    var el = host.firstChild;
+    requestAnimationFrame(function () { el.classList.add('show'); });
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () {
+      el.classList.remove('show');
+      setTimeout(function () { if (host.firstChild === el) host.innerHTML = ''; }, 220);
+    }, isError ? 3800 : 2400);
+  }
+
+  /** 버튼을 처리중 상태로 바꾼다 */
+  function busy(button, on, label) {
+    if (!button) return;
+    if (on) {
+      button.dataset.prevHtml = button.innerHTML;
+      button.disabled = true;
+      button.innerHTML = '<span class="spinner"></span>' + esc(label || '처리 중');
+    } else {
+      button.disabled = false;
+      if (button.dataset.prevHtml) button.innerHTML = button.dataset.prevHtml;
+    }
+  }
+
+  return {
+    esc: esc,
+    dateTime: dateTime,
+    date: date,
+    num: num,
+    pill: pill,
+    appBar: appBar,
+    progressCard: progressCard,
+    assetCard: assetCard,
+    loading: loading,
+    toast: toast,
+    busy: busy
+  };
+})();
+
+/* =================================================================
+   사진 처리 — 업로드 전에 브라우저에서 리사이즈한다.
+   원본(수 MB)을 그대로 google.script.run 으로 보내면 느리고 실패하기 쉽다(§10).
+   ================================================================= */
+var PhotoUtil = (function () {
+  var MAX_EDGE = 1600;
+  var QUALITY = 0.82;
+
+  function readAsDataUrl(file) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () { resolve(reader.result); };
+      reader.onerror = function () { reject(new Error('read failed')); };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function loadImage(dataUrl) {
+    return new Promise(function (resolve, reject) {
+      var img = new Image();
+      img.onload = function () { resolve(img); };
+      img.onerror = function () { reject(new Error('image decode failed')); };
+      img.src = dataUrl;
+    });
+  }
+
+  /**
+   * @return {Promise<{base64:string, mimeType:string, previewUrl:string}>}
+   */
+  function prepare(file) {
+    return readAsDataUrl(file)
+      .then(loadImage)
+      .then(function (img) {
+        var w = img.naturalWidth || img.width;
+        var h = img.naturalHeight || img.height;
+        var scale = Math.min(1, MAX_EDGE / Math.max(w, h));
+        var canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(w * scale));
+        canvas.height = Math.max(1, Math.round(h * scale));
+        var ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        var dataUrl = canvas.toDataURL('image/jpeg', QUALITY);
+        return {
+          base64: dataUrl.split(',')[1],
+          mimeType: 'image/jpeg',
+          previewUrl: dataUrl
+        };
+      });
+  }
+
+  /** 정지 이미지에서 QR 을 디코드한다 (카메라 사용 불가 환경 대체 경로) */
+  function decodeQrFromFile(file) {
+    return readAsDataUrl(file)
+      .then(loadImage)
+      .then(function (img) {
+        var w = img.naturalWidth || img.width;
+        var h = img.naturalHeight || img.height;
+        var scale = Math.min(1, 1200 / Math.max(w, h));
+        var canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(w * scale));
+        canvas.height = Math.max(1, Math.round(h * scale));
+        var ctx = canvas.getContext('2d', { willReadFrequently: true });
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        var data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        if (typeof jsQR !== 'function') return null;
+        var found = jsQR(data.data, data.width, data.height, {
+          inversionAttempts: 'attemptBoth'
+        });
+        return found && found.data ? found.data : null;
+      });
+  }
+
+  return { prepare: prepare, decodeQrFromFile: decodeQrFromFile };
+})();
+</script>

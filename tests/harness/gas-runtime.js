@@ -307,9 +307,9 @@ function htmlEscape(value) {
     .replace(/'/g, '&#39;');
 }
 
-function readHtmlFile(name) {
-  // Apps Script 파일명은 확장자를 제외하고 지정한다 ('html/index')
-  const file = path.join(SRC, name.endsWith('.html') ? name : name + '.html');
+function readHtmlFile(srcDir, name) {
+  // Apps Script 파일명은 확장자를 제외하고 지정한다 ('html/index' 또는 'index')
+  const file = path.join(srcDir, name.endsWith('.html') ? name : name + '.html');
   return fs.readFileSync(file, 'utf8');
 }
 
@@ -350,7 +350,7 @@ function evaluateTemplate(content, templateObject, context) {
   return fn(templateObject, htmlEscape);
 }
 
-function createHtmlService(context) {
+function createHtmlService(context, srcDir) {
   class HtmlOutput {
     constructor(content) { this.content = content; }
     getContent() { return this.content; }
@@ -377,8 +377,8 @@ function createHtmlService(context) {
   }
 
   return {
-    createTemplateFromFile: (name) => new HtmlTemplate(readHtmlFile(name)),
-    createHtmlOutputFromFile: (name) => new HtmlOutput(readHtmlFile(name)),
+    createTemplateFromFile: (name) => new HtmlTemplate(readHtmlFile(srcDir, name)),
+    createHtmlOutputFromFile: (name) => new HtmlOutput(readHtmlFile(srcDir, name)),
     createHtmlOutput: (html) => new HtmlOutput(html),
     XFrameOptionsMode: { ALLOWALL: 'ALLOWALL', DEFAULT: 'DEFAULT' },
   };
@@ -485,14 +485,20 @@ function createRuntime(options = {}) {
     DriveApp: createDriveApp(driveFiles, driveFolders),
   };
 
+  // 배포물 위치. 기본은 src/ 이며, 평면 빌드(dist/appsscript-flat) 검증 시 바꿔 넣는다.
+  const srcDir = options.srcDir || SRC;
+  const serverDir = options.serverDir === undefined
+    ? path.join(srcDir, 'server')
+    : path.join(srcDir, options.serverDir);
+
   context.globalThis = context;
   vm.createContext(context);
-  context.HtmlService = createHtmlService(context);
+  context.HtmlService = createHtmlService(context, srcDir);
 
   // 서버 코드 로드
   SERVER_FILES.forEach((file) => {
-    const code = fs.readFileSync(path.join(SRC, 'server', file), 'utf8');
-    vm.runInContext(code, context, { filename: 'src/server/' + file });
+    const code = fs.readFileSync(path.join(serverDir, file), 'utf8');
+    vm.runInContext(code, context, { filename: path.join(serverDir, file) });
   });
 
   // 초기 설정 주입

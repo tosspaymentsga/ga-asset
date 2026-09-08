@@ -48,10 +48,17 @@ src/
     scripts.html             google.script.run Promise 래퍼 · 상태 · 라우팅
     vendor_jsqr.html         jsQR 1.4.0 벤더링 (Apache-2.0, 외부 CDN 미사용)
 docs/
+  DEPLOY.md                  Apps Script 배포 가이드 (clasp / 편집기 / GitHub Actions)
   PILOT_CHECKLIST.md         실제 데이터 연결 · 파일럿 운영 체크리스트
+dist/
+  appsscript-flat/           편집기에 붙여넣기용 평면 빌드 (생성물 — src/ 가 원본)
+tools/
+  build-flat.js              평면 빌드 생성기
 tests/                       검증 도구 (배포되지 않음) — tests/README.md 참고
 .clasp.json.example          clasp 설정 예시
 ```
+
+배포 방법은 [`docs/DEPLOY.md`](docs/DEPLOY.md) 를 참고하세요.
 
 ---
 
@@ -146,7 +153,7 @@ var COLUMN_ALIASES = {
 
 > 검증: `node tests/column-mapping.js` — 시트 이름 `자산대장`, 컬럼명
 > `사번/성명/이메일/조직/자산번호/자산명/모델명/Serial/TAG번호/지급상태`,
-> 표준과 다른 컬럼 순서, 미지의 `비고` 컬럼 조합으로 전체 플로우(65개 검사)를 확인합니다.
+> 표준과 다른 컬럼 순서, 미지의 `비고` 컬럼 조합으로 전체 플로우(66개 검사)를 확인합니다.
 
 ---
 
@@ -362,6 +369,7 @@ node tests/scenarios.js        # 서버 로직 (MOCK / GOOGLE_SHEETS)         20
 node tests/column-mapping.js   # 실제 회사 시트 컬럼명/순서 시뮬레이션      66 checks
 node tests/safety.js           # 배포 전 안전성 (충돌/정규화/분모/동시성/권한) 81 checks
 node tests/performance.js      # Apps Script 성능 규칙 (자산 1,222건)      15 checks
+node tests/flat-build.js      # 편집기 배포용 평면 빌드 검증                41 checks
 cd tests && npm install && npx playwright test    # 실제 화면 (390px/1440px)  54 tests
 ```
 
